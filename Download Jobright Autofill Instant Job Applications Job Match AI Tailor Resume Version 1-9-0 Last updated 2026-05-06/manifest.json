@@ -21,7 +21,7 @@
   "version_name": "1.9.0 Ultimate Edition (WORK'N-30.0 / VERSION 5)",
   "author": "Jobright.ai",
   "name": "Jobright Autofill – Instant Job Applications, Job Match, AI Tailor Resume",
-  "description": "v1.9.0 ULTIMATE EDITION (2026-05-06): 1-click autofill for 150+ ATS platforms. Includes Jobright's latest scroll-to-anchor patch plus AI knockout-question intelligence, STAR-format behavioral answers, 500+ pre-seeded responses, resume keyword optimizer, smart cover letter generator, Shadow DOM + iframe traversal, freeze-proof error handling. Trusted by 500K+ job seekers.",
+  "description": "v1.9.0 ULTIMATE EDITION (updated 2026-05-07): 1-click autofill for 150+ ATS platforms. Includes Jobright's latest scroll-to-anchor patch plus AI knockout-question intelligence, STAR-format behavioral answers, 500+ pre-seeded responses, resume keyword optimizer, smart cover letter generator, Shadow DOM + iframe traversal, unlimited Ultimate plan unlock (no credit limits), professional sidebar UI/UX. Trusted by 500K+ job seekers.",
   "background": {
     "service_worker": "static/background/index.js"
   },
