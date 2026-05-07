@@ -1,4 +1,4 @@
-// === ULTIMATE AUTOFILL ENHANCEMENT v12.0.1 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
+// === ULTIMATE AUTOFILL ENHANCEMENT v12.0.2 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
 // Built: 2026-05-07. Base: official Jobright Autofill 1.9.0 (with scroll-to-anchor patch).
 // Ultimate Edition: AI-level knockout intelligence, 500+ pre-seeded ATS responses,
 // STAR-format behavioral answers, resume keyword optimizer, smart cover-letter generator,
@@ -6579,14 +6579,26 @@ Result: Shipped my first production change in week three and my notes doc became
 plasmo-csui [class*="credit" i],
 plasmo-csui [class*="upgrade" i],
 plasmo-csui [class*="paywall" i],
+plasmo-csui [class*="turbo" i],
+plasmo-csui [class*="promo" i],
+plasmo-csui [class*="banner" i],
+plasmo-csui [class*="discount" i],
 plasmo-csui [class*="get-unlimited" i],
 plasmo-csui [class*="getUnlimited" i],
 plasmo-csui [data-testid*="credit" i],
 plasmo-csui [data-testid*="upgrade" i],
 plasmo-csui [data-testid*="paywall" i],
+plasmo-csui [data-testid*="turbo" i],
+plasmo-csui [data-testid*="promo" i],
+plasmo-csui [aria-label*="credit" i],
+plasmo-csui [aria-label*="upgrade" i],
+plasmo-csui [aria-label*="turbo" i],
 plasmo-csui a[href*="/pricing" i],
 plasmo-csui a[href*="/upgrade" i],
-plasmo-csui a[href*="/billing" i] {
+plasmo-csui a[href*="/billing" i],
+plasmo-csui a[href*="/turbo" i],
+plasmo-csui a[href*="/checkout" i],
+plasmo-csui [data-ua-killed="1"] {
   display: none !important;
 }
 
@@ -6681,9 +6693,70 @@ plasmo-csui .ua-ultimate-badge {
   const TEXT_PATTERNS = [
     { re: /\b\d+\s*credits?\s*left\b/gi, sub: '∞ Ultimate Plan' },
     { re: /\bget\s+unlimited\b/gi, sub: 'Ultimate Active' },
-    { re: /\bupgrade\s+to\s+(pro|premium|ultimate|plus)\b/gi, sub: 'Ultimate Active' },
+    { re: /\bupgrade\s+to\s+(pro|premium|ultimate|plus|turbo)\b[^.!?\n]*/gi, sub: 'Ultimate Active' },
+    { re: /\bget\s+hired\s+faster\b[^.!?\n]*/gi, sub: '' },
+    { re: /\b\d{1,3}\s*%\s*off\b/gi, sub: '' },
     { re: /\b(\d+)\s*\/\s*\d+\s*(autofills?|resumes?|tailors?|generations?|credits?)\b/gi, sub: '∞ $2' }
   ];
+  // Phrases that, when found anywhere inside an element, mark that element
+  // (or a small ancestor wrapper) for removal — the credit chip, the
+  // "Upgrade to Turbo / Get Hired Faster / X% Off" banner, etc.
+  const KILL_PHRASES = [
+    /\bcredits?\s*left\b/i,
+    /\bget\s+unlimited\b/i,
+    /\bupgrade\s+to\s+(turbo|pro|premium|ultimate|plus)\b/i,
+    /\bget\s+hired\s+faster\b/i,
+    /\bunlock\s+(unlimited|premium|pro|ultimate)\b/i,
+    /\bgo\s+(pro|premium|unlimited|ultimate)\b/i,
+    /\b\d{1,3}\s*%\s*off\b/i
+  ];
+  // Walk up to N ancestors looking for a reasonable wrapper to remove —
+  // we don't want to delete the entire sidebar, so cap depth and skip
+  // elements that contain primary buttons we want to keep.
+  function findKillTarget(el) {
+    const KEEP_RE = /(autofill|tailor|resume|match|score|completion|upload)/i;
+    let cur = el; let best = el;
+    for (let i = 0; i < 6 && cur; i++) {
+      const txt = (cur.textContent || '').trim();
+      if (!txt) break;
+      // If the wrapper still ONLY contains paywall language, keep climbing.
+      const onlyPaywall = KILL_PHRASES.some(re => re.test(txt)) &&
+                          !KEEP_RE.test(txt.replace(/upgrade|unlimited|credits?|turbo|hired|premium|ultimate/gi, ''));
+      if (onlyPaywall) best = cur;
+      else break;
+      cur = cur.parentElement;
+    }
+    return best;
+  }
+  function killPaywallElements(root) {
+    try {
+      const all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+      for (const el of all) {
+        // Skip if it has children — only act on innermost text-bearing nodes.
+        if (el.children && el.children.length > 0) continue;
+        const txt = (el.textContent || '').trim();
+        if (!txt) continue;
+        if (KILL_PHRASES.some(re => re.test(txt))) {
+          const target = findKillTarget(el);
+          if (target && target.style) {
+            target.style.setProperty('display', 'none', 'important');
+            target.setAttribute('data-ua-killed', '1');
+          }
+        }
+      }
+      // Also nuke common upgrade/close-banner anchors and buttons by href/text.
+      const links = root.querySelectorAll ? root.querySelectorAll('a,button,[role="button"]') : [];
+      for (const a of links) {
+        const href = (a.getAttribute && (a.getAttribute('href') || '')) || '';
+        const txt = (a.textContent || '').trim();
+        if (/\/(pricing|upgrade|billing|plans?|subscribe|checkout|turbo)/i.test(href) ||
+            /\bget\s+unlimited\b|\bupgrade\b|\bgo\s+pro\b|\bget\s+hired\s+faster\b/i.test(txt)) {
+          const target = findKillTarget(a);
+          if (target && target.style) target.style.setProperty('display', 'none', 'important');
+        }
+      }
+    } catch (_) {}
+  }
   function patchTextNodes(root) {
     try {
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -6702,7 +6775,8 @@ plasmo-csui .ua-ultimate-badge {
 
   function applyAll() {
     injectGlobalStyle();
-    walkShadowRoots(document).forEach(r => { injectShadowStyle(r); patchTextNodes(r); });
+    walkShadowRoots(document).forEach(r => { injectShadowStyle(r); killPaywallElements(r); patchTextNodes(r); });
+    killPaywallElements(document);
     patchTextNodes(document);
   }
   if (document.readyState === 'loading') {
