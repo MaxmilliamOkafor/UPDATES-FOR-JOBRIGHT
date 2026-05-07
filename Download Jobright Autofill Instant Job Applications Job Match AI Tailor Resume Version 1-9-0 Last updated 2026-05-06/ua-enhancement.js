@@ -1,4 +1,4 @@
-// === ULTIMATE AUTOFILL ENHANCEMENT v12.0.2 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
+// === ULTIMATE AUTOFILL ENHANCEMENT v12.0.3 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
 // Built: 2026-05-07. Base: official Jobright Autofill 1.9.0 (with scroll-to-anchor patch).
 // Ultimate Edition: AI-level knockout intelligence, 500+ pre-seeded ATS responses,
 // STAR-format behavioral answers, resume keyword optimizer, smart cover-letter generator,
@@ -6632,6 +6632,25 @@ plasmo-csui [role="button"]:focus-visible {
 }
 plasmo-csui button:active,
 plasmo-csui [role="button"]:active { transform: translateY(0) !important; }
+
+/* Vertical breathing room between stacked buttons (e.g. "Autofill" /
+   "Generate Custom Resume + Autofill") */
+plasmo-csui button + button,
+plasmo-csui [role="button"] + [role="button"],
+plasmo-csui button + [role="button"],
+plasmo-csui [role="button"] + button {
+  margin-top: 12px !important;
+}
+/* Flex/grid containers that hold the action buttons should gap them
+   instead of butting them together */
+plasmo-csui [class*="action" i],
+plasmo-csui [class*="button" i][class*="group" i],
+plasmo-csui [class*="cta" i],
+plasmo-csui [class*="btn" i][class*="wrap" i] {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+}
 
 /* Cards / sections: even spacing and a consistent border treatment */
 plasmo-csui [class*="card" i],
