@@ -1,5 +1,5 @@
-// === ULTIMATE AUTOFILL ENHANCEMENT v12.0 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
-// Built: 2026-05-06. Base: official Jobright Autofill 1.9.0 (with scroll-to-anchor patch).
+// === ULTIMATE AUTOFILL ENHANCEMENT v12.0.1 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
+// Built: 2026-05-07. Base: official Jobright Autofill 1.9.0 (with scroll-to-anchor patch).
 // Ultimate Edition: AI-level knockout intelligence, 500+ pre-seeded ATS responses,
 // STAR-format behavioral answers, resume keyword optimizer, smart cover-letter generator,
 // 150+ ATS platforms (Paradox/Olivia, Phenom chatbot, Beamery, HireVue chat, ModernHire),
