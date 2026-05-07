@@ -6398,3 +6398,322 @@ Result: Shipped my first production change in week three and my notes doc became
     if (!found) tryInject();
   }, 4000);
 })();
+
+// ===================== ULTIMATE UNLOCK + UI/UX POLISH (v12.0) =====================
+// Removes credit/quota limits for autofill, custom-resume generation and tailoring.
+// Spoofs Jobright API + storage to report a permanent unlimited PRO subscription.
+// Hides paywall prompts ("4 Credits Left", "Get Unlimited", upgrade modals) and
+// applies a professional sidebar layout: tighter spacing, accessible buttons,
+// consistent radius, modern typography, dark/light-aware contrast.
+(function () {
+  'use strict';
+  const TAG = '[UA-UNLOCK]';
+  const log = (...a) => { try { console.log(TAG, ...a); } catch (_) {} };
+
+  // ---------- 1. Unlimited subscription payload ----------
+  const FAR_FUTURE = '2099-12-31T23:59:59.000Z';
+  const UNLIMITED = 999999;
+  const PRO_PROFILE = {
+    isPro: true, isPremium: true, isPlus: true, isUltimate: true, isPaid: true,
+    isVip: true, isMember: true, isSubscribed: true, isTrialing: false, hasActiveSubscription: true,
+    plan: 'ultimate', planName: 'Ultimate', planTier: 'ultimate', tier: 'ultimate',
+    subscriptionStatus: 'active', subscriptionType: 'ultimate', subscriptionLevel: 'ultimate',
+    membership: 'ultimate', membershipLevel: 'ultimate', membershipStatus: 'active',
+    role: 'pro', userType: 'pro', accountType: 'ultimate',
+    credits: UNLIMITED, creditsRemaining: UNLIMITED, creditsLeft: UNLIMITED,
+    creditBalance: UNLIMITED, balance: UNLIMITED, quota: UNLIMITED, quotaRemaining: UNLIMITED,
+    autofillCredits: UNLIMITED, resumeCredits: UNLIMITED, tailorCredits: UNLIMITED,
+    answerCredits: UNLIMITED, coverLetterCredits: UNLIMITED, matchCredits: UNLIMITED,
+    aiCredits: UNLIMITED, monthlyCredits: UNLIMITED, dailyCredits: UNLIMITED,
+    usage: 0, usageCount: 0, used: 0, dailyUsage: 0, monthlyUsage: 0,
+    limit: UNLIMITED, dailyLimit: UNLIMITED, monthlyLimit: UNLIMITED,
+    maxAutofills: UNLIMITED, maxResumes: UNLIMITED, maxTailors: UNLIMITED,
+    autofillsRemaining: UNLIMITED, resumesRemaining: UNLIMITED, tailorsRemaining: UNLIMITED,
+    expiresAt: FAR_FUTURE, expiryDate: FAR_FUTURE, expireAt: FAR_FUTURE,
+    renewAt: FAR_FUTURE, validUntil: FAR_FUTURE, endDate: FAR_FUTURE, periodEnd: FAR_FUTURE,
+    features: {
+      autofill: true, customResume: true, tailorResume: true, coverLetter: true,
+      aiAnswer: true, knockout: true, behavioral: true, matchScore: true,
+      unlimitedAutofill: true, unlimitedResume: true, unlimitedTailor: true,
+      unlimitedCoverLetter: true, unlimitedAnswer: true, unlimited: true,
+      premium: true, ultimate: true, prioritySupport: true
+    },
+    permissions: ['autofill','custom_resume','tailor_resume','cover_letter','ai_answer','unlimited','pro','ultimate'],
+    entitlements: ['unlimited_autofill','unlimited_resume','unlimited_tailor','unlimited_cover_letter','unlimited_ai','ultimate']
+  };
+
+  // Recursively merge unlimited values onto whatever object the API returns,
+  // preserving fields the UI may need (id, name, email) and only overriding
+  // quota/plan/credit-shaped keys.
+  const QUOTA_KEY_RE = /(credit|quota|usage|limit|remaining|left|balance|tier|plan|subscription|membership|premium|pro|paid|trial|expir|valid|renew|periodend|enddate|isvip|isultimate)/i;
+  const COUNT_KEY_RE = /(credit|quota|usage|limit|remaining|left|balance|count|max|times|attempts|fills|generations|tailors)/i;
+  function patchObject(obj, depth) {
+    if (!obj || typeof obj !== 'object' || depth > 8) return obj;
+    if (Array.isArray(obj)) { obj.forEach(v => patchObject(v, depth + 1)); return obj; }
+    for (const k of Object.keys(obj)) {
+      const v = obj[k];
+      if (v && typeof v === 'object') { patchObject(v, depth + 1); continue; }
+      if (typeof v === 'boolean' && /^(is|has)/.test(k) &&
+          /(pro|premium|paid|ultimate|plus|vip|subscrib|active|unlimited|member)/i.test(k)) {
+        obj[k] = true;
+      } else if (typeof v === 'boolean' && /^(is|needs?|require|show)/.test(k) &&
+          /(trial|free|locked|paywall|upgrade|expired|disabled|limit)/i.test(k)) {
+        obj[k] = false;
+      } else if (typeof v === 'number' && COUNT_KEY_RE.test(k) && !/used|consumed|spent/i.test(k)) {
+        obj[k] = UNLIMITED;
+      } else if (typeof v === 'number' && /(used|consumed|spent)/i.test(k)) {
+        obj[k] = 0;
+      } else if (typeof v === 'string') {
+        if (/^(plan|tier|subscription|membership|level|role|userType|accountType)/i.test(k)) obj[k] = 'ultimate';
+        else if (/(status)$/i.test(k) && /(subscription|membership|trial|plan)/i.test(k)) obj[k] = 'active';
+      }
+    }
+    // Spread the canonical PRO profile fields whenever the object looks like a
+    // user/subscription/quota record.
+    const looksLikeAccount = Object.keys(obj).some(k => QUOTA_KEY_RE.test(k));
+    if (looksLikeAccount) Object.assign(obj, structuredCloneSafe(PRO_PROFILE));
+    return obj;
+  }
+  function structuredCloneSafe(o) { try { return structuredClone(o); } catch (_) { return JSON.parse(JSON.stringify(o)); } }
+
+  // ---------- 2. fetch() interception ----------
+  const JOBRIGHT_HOST_RE = /(^|\.)jobright(?:-internal)?\.(?:ai|com)$/i;
+  const JOBRIGHT_PATH_RE = /(user|account|profile|me|subscription|membership|plan|credit|quota|usage|limit|entitlement|permission|feature|billing|paywall|tier|premium)/i;
+  function shouldPatchUrl(url) {
+    try {
+      const u = new URL(url, location.href);
+      if (!JOBRIGHT_HOST_RE.test(u.hostname)) return false;
+      return JOBRIGHT_PATH_RE.test(u.pathname);
+    } catch (_) { return false; }
+  }
+  const origFetch = window.fetch;
+  if (origFetch && !window.__uaUnlockFetchPatched) {
+    window.__uaUnlockFetchPatched = true;
+    window.fetch = async function (input, init) {
+      const url = typeof input === 'string' ? input : (input && input.url) || '';
+      const res = await origFetch.apply(this, arguments);
+      if (!shouldPatchUrl(url)) return res;
+      try {
+        const ct = res.headers.get('content-type') || '';
+        if (!/json/i.test(ct)) return res;
+        const cloned = res.clone();
+        const data = await cloned.json();
+        const patched = patchObject(data, 0);
+        const body = JSON.stringify(patched);
+        const headers = new Headers(res.headers); headers.set('content-length', String(body.length));
+        log('patched fetch', url);
+        return new Response(body, { status: res.status, statusText: res.statusText, headers });
+      } catch (e) { return res; }
+    };
+  }
+
+  // ---------- 3. XMLHttpRequest interception ----------
+  if (window.XMLHttpRequest && !window.__uaUnlockXhrPatched) {
+    window.__uaUnlockXhrPatched = true;
+    const X = window.XMLHttpRequest.prototype;
+    const origOpen = X.open, origSend = X.send;
+    X.open = function (method, url) { this.__uaUrl = url; return origOpen.apply(this, arguments); };
+    X.send = function () {
+      const url = this.__uaUrl || '';
+      if (shouldPatchUrl(url)) {
+        this.addEventListener('readystatechange', () => {
+          if (this.readyState !== 4) return;
+          try {
+            const ct = (this.getResponseHeader && this.getResponseHeader('content-type')) || '';
+            if (!/json/i.test(ct)) return;
+            const txt = this.responseText; if (!txt) return;
+            const data = JSON.parse(txt);
+            const patched = JSON.stringify(patchObject(data, 0));
+            Object.defineProperty(this, 'responseText', { get: () => patched, configurable: true });
+            Object.defineProperty(this, 'response', { get: () => patched, configurable: true });
+            log('patched xhr', url);
+          } catch (_) {}
+        });
+      }
+      return origSend.apply(this, arguments);
+    };
+  }
+
+  // ---------- 4. chrome.storage override ----------
+  const STORAGE_OVERRIDES = {
+    user_subscription: PRO_PROFILE, subscription: PRO_PROFILE, membership: PRO_PROFILE,
+    plan: 'ultimate', planTier: 'ultimate', tier: 'ultimate',
+    credits: UNLIMITED, creditsLeft: UNLIMITED, creditBalance: UNLIMITED,
+    quota: UNLIMITED, quotaRemaining: UNLIMITED, usage: 0,
+    isPro: true, isPremium: true, isUltimate: true, isPaid: true, isSubscribed: true,
+    autofillCredits: UNLIMITED, resumeCredits: UNLIMITED, tailorCredits: UNLIMITED
+  };
+  try {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local && !chrome.storage.local.__uaUnlockPatched) {
+      const origGet = chrome.storage.local.get.bind(chrome.storage.local);
+      chrome.storage.local.get = function (keys, cb) {
+        return origGet(keys, (items) => {
+          try {
+            items = items || {};
+            for (const k of Object.keys(STORAGE_OVERRIDES)) {
+              if (items[k] === undefined && (keys === null || keys === undefined || keys === k ||
+                  (Array.isArray(keys) && keys.includes(k)) ||
+                  (typeof keys === 'object' && keys && k in keys))) {
+                items[k] = structuredCloneSafe(STORAGE_OVERRIDES[k]);
+              } else if (items[k] !== undefined) {
+                if (typeof items[k] === 'number' && COUNT_KEY_RE.test(k)) items[k] = UNLIMITED;
+                else if (typeof items[k] === 'object') patchObject(items[k], 0);
+              }
+            }
+            // Seed full overrides when caller passes null (request all).
+            if (keys === null || keys === undefined) Object.assign(items, structuredCloneSafe(STORAGE_OVERRIDES));
+          } catch (_) {}
+          if (typeof cb === 'function') cb(items);
+        });
+      };
+      chrome.storage.local.__uaUnlockPatched = true;
+      // Persist overrides so async readers also see them.
+      try { chrome.storage.local.set(STORAGE_OVERRIDES); } catch (_) {}
+    }
+  } catch (_) {}
+
+  // ---------- 5. Sidebar UI/UX polish + paywall hider ----------
+  const STYLE_ID = 'ua-unlock-style';
+  const CSS = `
+/* Hide credit counters, upgrade banners, paywalls inside the Jobright sidebar */
+plasmo-csui [class*="credit" i],
+plasmo-csui [class*="upgrade" i],
+plasmo-csui [class*="paywall" i],
+plasmo-csui [class*="get-unlimited" i],
+plasmo-csui [class*="getUnlimited" i],
+plasmo-csui [data-testid*="credit" i],
+plasmo-csui [data-testid*="upgrade" i],
+plasmo-csui [data-testid*="paywall" i],
+plasmo-csui a[href*="/pricing" i],
+plasmo-csui a[href*="/upgrade" i],
+plasmo-csui a[href*="/billing" i] {
+  display: none !important;
+}
+
+/* Professional typography + spacing inside the sidebar shadow root host */
+plasmo-csui {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Buttons: consistent radius, padding, focus ring, hover lift */
+plasmo-csui button,
+plasmo-csui [role="button"] {
+  border-radius: 12px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em !important;
+  padding: 12px 18px !important;
+  transition: transform 120ms ease, box-shadow 120ms ease, background-color 120ms ease !important;
+  min-height: 44px !important;
+  line-height: 1.25 !important;
+  cursor: pointer !important;
+}
+plasmo-csui button:hover,
+plasmo-csui [role="button"]:hover {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 6px 16px rgba(0,0,0,0.18) !important;
+}
+plasmo-csui button:focus-visible,
+plasmo-csui [role="button"]:focus-visible {
+  outline: 2px solid #6cf5b8 !important;
+  outline-offset: 2px !important;
+}
+plasmo-csui button:active,
+plasmo-csui [role="button"]:active { transform: translateY(0) !important; }
+
+/* Cards / sections: even spacing and a consistent border treatment */
+plasmo-csui [class*="card" i],
+plasmo-csui [class*="section" i],
+plasmo-csui [class*="panel" i] {
+  border-radius: 14px !important;
+  padding: 16px !important;
+  margin-bottom: 12px !important;
+}
+
+/* Progress bar: smoother, taller, animated */
+plasmo-csui [class*="progress" i],
+plasmo-csui progress {
+  height: 8px !important;
+  border-radius: 999px !important;
+  overflow: hidden !important;
+}
+
+/* Replace the credit chip area with a clean "Ultimate" badge */
+plasmo-csui .ua-ultimate-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 6px 12px !important;
+  border-radius: 999px !important;
+  background: linear-gradient(135deg, #6cf5b8 0%, #2bb673 100%) !important;
+  color: #062b1c !important;
+  font-weight: 700 !important;
+  font-size: 12px !important;
+  letter-spacing: 0.02em !important;
+}
+`;
+  function injectGlobalStyle() {
+    if (document.getElementById(STYLE_ID)) return;
+    const s = document.createElement('style');
+    s.id = STYLE_ID; s.textContent = CSS;
+    (document.head || document.documentElement).appendChild(s);
+  }
+  function injectShadowStyle(root) {
+    if (!root || !root.querySelector || root.getElementById?.(STYLE_ID)) return;
+    if ([...root.childNodes].some(n => n.id === STYLE_ID)) return;
+    const s = document.createElement('style'); s.id = STYLE_ID; s.textContent = CSS;
+    root.appendChild(s);
+  }
+  function walkShadowRoots(node) {
+    const out = [];
+    const stack = [node];
+    while (stack.length) {
+      const cur = stack.pop();
+      if (!cur) continue;
+      if (cur.shadowRoot) { out.push(cur.shadowRoot); stack.push(cur.shadowRoot); }
+      const kids = cur.children || cur.childNodes || [];
+      for (let i = 0; i < kids.length; i++) stack.push(kids[i]);
+    }
+    return out;
+  }
+
+  // Replace any visible "X Credits Left" / "Get Unlimited" text in shadow DOM.
+  const TEXT_PATTERNS = [
+    { re: /\b\d+\s*credits?\s*left\b/gi, sub: '∞ Ultimate Plan' },
+    { re: /\bget\s+unlimited\b/gi, sub: 'Ultimate Active' },
+    { re: /\bupgrade\s+to\s+(pro|premium|ultimate|plus)\b/gi, sub: 'Ultimate Active' },
+    { re: /\b(\d+)\s*\/\s*\d+\s*(autofills?|resumes?|tailors?|generations?|credits?)\b/gi, sub: '∞ $2' }
+  ];
+  function patchTextNodes(root) {
+    try {
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      let n; const targets = [];
+      while ((n = walker.nextNode())) {
+        const t = n.nodeValue; if (!t) continue;
+        for (const p of TEXT_PATTERNS) { if (p.re.test(t)) { targets.push(n); break; } p.re.lastIndex = 0; }
+      }
+      for (const node of targets) {
+        let v = node.nodeValue;
+        for (const p of TEXT_PATTERNS) { v = v.replace(p.re, p.sub); }
+        node.nodeValue = v;
+      }
+    } catch (_) {}
+  }
+
+  function applyAll() {
+    injectGlobalStyle();
+    walkShadowRoots(document).forEach(r => { injectShadowStyle(r); patchTextNodes(r); });
+    patchTextNodes(document);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', applyAll, { once: true });
+  } else {
+    applyAll();
+  }
+  try {
+    const mo = new MutationObserver(() => { applyAll(); });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  } catch (_) {}
+
+  log('Ultimate unlock + UI polish active');
+})();
