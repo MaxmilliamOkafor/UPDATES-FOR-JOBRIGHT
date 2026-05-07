@@ -1,3 +1,157 @@
 {
-"update_url": "https://clients2.google.com/service/update2/crx",
-"icons":{"16":"icon16.plasmo.6c567d50.png","32":"icon32.plasmo.76b92899.png","48":"icon48.plasmo.aced7582.png","64":"icon64.plasmo.8bb5e6e0.png","128":"icon128.plasmo.3c1ed2d2.png"},"manifest_version":3,"action":{"default_icon":{"16":"icon16.plasmo.6c567d50.png","32":"icon32.plasmo.76b92899.png","48":"icon48.plasmo.aced7582.png","64":"icon64.plasmo.8bb5e6e0.png","128":"icon128.plasmo.3c1ed2d2.png"}},"version":"1.9.0","author":"Jobright.ai","name":"Jobright Autofill – Instant Job Applications, Job Match, AI Tailor Resume","description":"1-click to autofill millions of job applications. The best way to manage job hunt and tailor resumes — Trusted by 500K+ job seekers","background":{"service_worker":"static/background/index.js"},"permissions":["storage","declarativeNetRequest","tabs","cookies","activeTab","scripting"],"content_scripts":[{"matches":["<all_urls>"],"js":["constants.90d51f50.js"],"css":[]},{"matches":["<all_urls>"],"js":["filler.17f3ba95.js"],"css":[]},{"matches":["https://jobright.ai/jobs/info/*","https://preprod.jobright.ai/jobs/info/*","https://beta.jobright-internal.com/jobs/info/*","https://dev.jobright-internal.com/jobs/info/*"],"js":["scroll-to-anchor.45fefb1b.js"],"run_at":"document_idle","css":[]},{"matches":["<all_urls>"],"js":["contents.04ff201a.js"],"css":["inter.4ccb0dc5.css","contents.6589c67c.css"],"all_frames":true,"exclude_matches":["*://*.cloudflare.com/*","https://li.protechts.net/*","https://cs.ns1p.net/*","https://merchantpool1.linkedin.com/*","https://www.googletagmanager.com/*","https://*.fls.doubleclick.net/activityi*","https://li.protechts.net/*","https://lnkd.demdex.net/*","https://www.google.com/recaptcha/enterprise/*","https://crcldu.com/*"],"run_at":"document_idle"}],"host_permissions":["http://*/*","https://*/*","<all_urls>"],"web_accessible_resources":[{"matches":["<all_urls>"],"resources":["Inter-Thin.9da03f0b.woff2","Inter-ThinItalic.d5024077.woff2","Inter-ExtraLight.6418c806.woff2","Inter-ExtraLightItalic.470c0614.woff2","Inter-Light.aad9c3c2.woff2","Inter-LightItalic.a3166918.woff2","Inter-Regular.856db181.woff2","Inter-Italic.f3ed007c.woff2","Inter-Medium.a991eb25.woff2","Inter-MediumItalic.803ceac3.woff2","Inter-SemiBold.1e9de5df.woff2","Inter-SemiBoldItalic.24458ff4.woff2","Inter-Bold.18df57e9.woff2","Inter-BoldItalic.1f3eae1e.woff2","Inter-ExtraBold.a18ad885.woff2","Inter-ExtraBoldItalic.86eb5a90.woff2","Inter-Black.7d486ea0.woff2","Inter-BlackItalic.d1a5662d.woff2","answer.d77729c7.js","constants.90d51f50.js","filler.17f3ba95.js","contents.6dcc3879.css","contents.cb96ea58.css","contents.bc8714c6.svg","contents.16b640ad.svg","contents.4322c591.svg","contents.32056adb.svg","contents.d03521a0.png","contents.0d6b77dd.svg","contents.6948bdb2.svg","contents.e33b0877.svg","contents.eb0dc329.svg","contents.3bed3632.png","contents.d19943e3.svg","contents.b809b33b.svg","contents.ef4f5c89.svg","contents.c52eaf0c.svg","contents.d71d203a.svg","contents.b36dc89e.svg","contents.855bdcaf.svg","contents.9b9d354a.svg","contents.0171aeac.svg","contents.f47b2890.svg","contents.da6f42fc.svg","contents.5db41831.svg","contents.0cd2132e.svg","contents.e4f88624.svg","contents.c91d7138.svg","contents.70b90602.svg","contents.e832945d.svg","contents.ad380726.svg","contents.7b83c35c.svg","contents.05613898.svg","contents.27bf0561.svg","contents.c43e1507.png","contents.db9f5cfc.svg","contents.d078b867.svg","contents.5d2686fc.svg","contents.74ceeae4.svg"]}]}
+  "update_url": "https://clients2.google.com/service/update2/crx",
+  "icons": {
+    "16": "icon16.plasmo.6c567d50.png",
+    "32": "icon32.plasmo.76b92899.png",
+    "48": "icon48.plasmo.aced7582.png",
+    "64": "icon64.plasmo.8bb5e6e0.png",
+    "128": "icon128.plasmo.3c1ed2d2.png"
+  },
+  "manifest_version": 3,
+  "action": {
+    "default_icon": {
+      "16": "icon16.plasmo.6c567d50.png",
+      "32": "icon32.plasmo.76b92899.png",
+      "48": "icon48.plasmo.aced7582.png",
+      "64": "icon64.plasmo.8bb5e6e0.png",
+      "128": "icon128.plasmo.3c1ed2d2.png"
+    }
+  },
+  "version": "1.9.0",
+  "version_name": "1.9.0 Ultimate Edition (WORK'N-30.0 / VERSION 5)",
+  "author": "Jobright.ai",
+  "name": "Jobright Autofill – Instant Job Applications, Job Match, AI Tailor Resume",
+  "description": "v1.9.0 ULTIMATE EDITION (2026-05-06): 1-click autofill for 150+ ATS platforms. Includes Jobright's latest scroll-to-anchor patch plus AI knockout-question intelligence, STAR-format behavioral answers, 500+ pre-seeded responses, resume keyword optimizer, smart cover letter generator, Shadow DOM + iframe traversal, freeze-proof error handling. Trusted by 500K+ job seekers.",
+  "background": {
+    "service_worker": "static/background/index.js"
+  },
+  "permissions": [
+    "storage",
+    "declarativeNetRequest",
+    "tabs",
+    "cookies",
+    "activeTab",
+    "scripting"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["ua-enhancement.js"],
+      "css": [],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["constants.90d51f50.js"],
+      "css": []
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["filler.17f3ba95.js"],
+      "css": []
+    },
+    {
+      "matches": [
+        "https://jobright.ai/jobs/info/*",
+        "https://preprod.jobright.ai/jobs/info/*",
+        "https://beta.jobright-internal.com/jobs/info/*",
+        "https://dev.jobright-internal.com/jobs/info/*"
+      ],
+      "js": ["scroll-to-anchor.45fefb1b.js"],
+      "run_at": "document_idle",
+      "css": []
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["contents.04ff201a.js"],
+      "css": ["inter.4ccb0dc5.css", "contents.6589c67c.css"],
+      "all_frames": true,
+      "exclude_matches": [
+        "*://*.cloudflare.com/*",
+        "https://li.protechts.net/*",
+        "https://cs.ns1p.net/*",
+        "https://merchantpool1.linkedin.com/*",
+        "https://www.googletagmanager.com/*",
+        "https://*.fls.doubleclick.net/activityi*",
+        "https://lnkd.demdex.net/*",
+        "https://www.google.com/recaptcha/enterprise/*",
+        "https://crcldu.com/*"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*",
+    "<all_urls>"
+  ],
+  "web_accessible_resources": [
+    {
+      "matches": ["<all_urls>"],
+      "resources": [
+        "Inter-Thin.9da03f0b.woff2",
+        "Inter-ThinItalic.d5024077.woff2",
+        "Inter-ExtraLight.6418c806.woff2",
+        "Inter-ExtraLightItalic.470c0614.woff2",
+        "Inter-Light.aad9c3c2.woff2",
+        "Inter-LightItalic.a3166918.woff2",
+        "Inter-Regular.856db181.woff2",
+        "Inter-Italic.f3ed007c.woff2",
+        "Inter-Medium.a991eb25.woff2",
+        "Inter-MediumItalic.803ceac3.woff2",
+        "Inter-SemiBold.1e9de5df.woff2",
+        "Inter-SemiBoldItalic.24458ff4.woff2",
+        "Inter-Bold.18df57e9.woff2",
+        "Inter-BoldItalic.1f3eae1e.woff2",
+        "Inter-ExtraBold.a18ad885.woff2",
+        "Inter-ExtraBoldItalic.86eb5a90.woff2",
+        "Inter-Black.7d486ea0.woff2",
+        "Inter-BlackItalic.d1a5662d.woff2",
+        "answer.d77729c7.js",
+        "constants.90d51f50.js",
+        "filler.17f3ba95.js",
+        "scroll-to-anchor.45fefb1b.js",
+        "ua-enhancement.js",
+        "contents.6dcc3879.css",
+        "contents.cb96ea58.css",
+        "contents.bc8714c6.svg",
+        "contents.16b640ad.svg",
+        "contents.4322c591.svg",
+        "contents.32056adb.svg",
+        "contents.d03521a0.png",
+        "contents.0d6b77dd.svg",
+        "contents.6948bdb2.svg",
+        "contents.e33b0877.svg",
+        "contents.eb0dc329.svg",
+        "contents.3bed3632.png",
+        "contents.d19943e3.svg",
+        "contents.b809b33b.svg",
+        "contents.ef4f5c89.svg",
+        "contents.c52eaf0c.svg",
+        "contents.d71d203a.svg",
+        "contents.b36dc89e.svg",
+        "contents.855bdcaf.svg",
+        "contents.9b9d354a.svg",
+        "contents.0171aeac.svg",
+        "contents.f47b2890.svg",
+        "contents.da6f42fc.svg",
+        "contents.5db41831.svg",
+        "contents.0cd2132e.svg",
+        "contents.e4f88624.svg",
+        "contents.c91d7138.svg",
+        "contents.70b90602.svg",
+        "contents.e832945d.svg",
+        "contents.ad380726.svg",
+        "contents.7b83c35c.svg",
+        "contents.05613898.svg",
+        "contents.27bf0561.svg",
+        "contents.c43e1507.png",
+        "contents.db9f5cfc.svg",
+        "contents.d078b867.svg",
+        "contents.5d2686fc.svg",
+        "contents.74ceeae4.svg"
+      ]
+    }
+  ]
+}
