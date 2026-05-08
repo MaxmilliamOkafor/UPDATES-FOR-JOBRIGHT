@@ -1,4 +1,4 @@
-// === ULTIMATE AUTOFILL ENHANCEMENT v12.0.3 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
+// === ULTIMATE AUTOFILL ENHANCEMENT v12.0.4 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
 // Built: 2026-05-07. Base: official Jobright Autofill 1.9.0 (with scroll-to-anchor patch).
 // Ultimate Edition: AI-level knockout intelligence, 500+ pre-seeded ATS responses,
 // STAR-format behavioral answers, resume keyword optimizer, smart cover-letter generator,
@@ -6792,10 +6792,85 @@ plasmo-csui .ua-ultimate-badge {
     } catch (_) {}
   }
 
+  // Force visible spacing between the primary action buttons in the sidebar.
+  // We locate candidate buttons by their text content (since the obfuscated
+  // class names change between builds) and apply inline !important margin so
+  // we beat any inline styles Plasmo or styled-components emit at runtime.
+  // Also handles the case where "Autofill" and "Generate Custom Resume +
+  // Autofill" are TWO inner lines of a SINGLE composite button — in that
+  // case we space their inner wrappers instead.
+  const BUTTON_LABEL_RE = /^(autofill|generate\s+custom\s+resume.*autofill|add\s+this\s+job.*one\s+click|upload\s+resume|your\s+autofill\s+information)$/i;
+  function forceButtonSpacing(root) {
+    try {
+      // 1. Two-button case: stacked siblings sharing a parent.
+      const buttons = root.querySelectorAll ? root.querySelectorAll('button,[role="button"],a[class*="btn" i]') : [];
+      const sidebarBtns = [];
+      for (const b of buttons) {
+        const txt = (b.textContent || '').trim();
+        if (!txt) continue;
+        if (BUTTON_LABEL_RE.test(txt) || /generate\s+custom\s+resume/i.test(txt) || /^autofill$/i.test(txt)) {
+          sidebarBtns.push(b);
+        }
+      }
+      // Group by parent and bump margin on every non-first sibling button.
+      const parents = new Map();
+      for (const b of sidebarBtns) {
+        const p = b.parentElement; if (!p) continue;
+        if (!parents.has(p)) parents.set(p, []);
+        parents.get(p).push(b);
+      }
+      for (const [parent, group] of parents) {
+        if (group.length >= 2) {
+          // Force a flex column with gap on the parent for robust spacing.
+          parent.style.setProperty('display', 'flex', 'important');
+          parent.style.setProperty('flex-direction', 'column', 'important');
+          parent.style.setProperty('gap', '16px', 'important');
+        }
+        for (let i = 1; i < group.length; i++) {
+          group[i].style.setProperty('margin-top', '16px', 'important');
+        }
+      }
+
+      // 2. Composite-single-button case: one wrapper with two stacked text
+      // lines ("Autofill" header + "Generate Custom Resume + Autofill"
+      // subtitle). Detect by finding a button whose direct text descendants
+      // include BOTH phrases and add padding between its first and second
+      // text-bearing children.
+      for (const b of buttons) {
+        const all = (b.textContent || '');
+        const hasAuto = /\bautofill\b/i.test(all);
+        const hasGen  = /\bgenerate\s+custom\s+resume/i.test(all);
+        if (!hasAuto || !hasGen) continue;
+        // Find direct child wrappers that each contain only one of the labels.
+        const children = Array.from(b.children || []);
+        let headerEl = null, subEl = null;
+        for (const c of children) {
+          const t = (c.textContent || '').trim();
+          if (/^autofill$/i.test(t)) headerEl = c;
+          else if (/generate\s+custom\s+resume/i.test(t)) subEl = c;
+        }
+        if (headerEl && subEl) {
+          headerEl.style.setProperty('margin-bottom', '10px', 'important');
+          headerEl.style.setProperty('padding-bottom', '6px', 'important');
+          subEl.style.setProperty('margin-top', '6px', 'important');
+          // Soft divider so the separation is visible inside the green pill.
+          headerEl.style.setProperty('border-bottom', '1px solid rgba(0,0,0,0.12)', 'important');
+        }
+        // Generous inner padding so the button breathes regardless.
+        b.style.setProperty('padding', '18px 22px', 'important');
+        b.style.setProperty('display', 'flex', 'important');
+        b.style.setProperty('flex-direction', 'column', 'important');
+        b.style.setProperty('gap', '8px', 'important');
+        b.style.setProperty('align-items', 'center', 'important');
+      }
+    } catch (_) {}
+  }
+
   function applyAll() {
     injectGlobalStyle();
-    walkShadowRoots(document).forEach(r => { injectShadowStyle(r); killPaywallElements(r); patchTextNodes(r); });
+    walkShadowRoots(document).forEach(r => { injectShadowStyle(r); killPaywallElements(r); forceButtonSpacing(r); patchTextNodes(r); });
     killPaywallElements(document);
+    forceButtonSpacing(document);
     patchTextNodes(document);
   }
   if (document.readyState === 'loading') {
