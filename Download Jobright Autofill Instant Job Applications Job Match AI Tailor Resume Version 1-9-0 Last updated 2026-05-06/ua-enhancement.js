@@ -1,4 +1,4 @@
-// === ULTIMATE AUTOFILL ENHANCEMENT v12.0.1 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
+// === ULTIMATE AUTOFILL ENHANCEMENT v12.1.0 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
 // Built: 2026-05-07. Base: official Jobright Autofill 1.9.0 (with scroll-to-anchor patch).
 // Ultimate Edition: AI-level knockout intelligence, 500+ pre-seeded ATS responses,
 // STAR-format behavioral answers, resume keyword optimizer, smart cover-letter generator,
@@ -6416,6 +6416,9 @@ Result: Shipped my first production change in week three and my notes doc became
   const PRO_PROFILE = {
     isPro: true, isPremium: true, isPlus: true, isUltimate: true, isPaid: true,
     isVip: true, isMember: true, isSubscribed: true, isTrialing: false, hasActiveSubscription: true,
+    // Jobright-specific gating fields (read by useProfileStore + textarea tracker)
+    subscribed: true, isTurbo: true, hasTurbo: true, turbo: true, turboEnabled: true,
+    turboSubscribed: true, isStudent: true, studentTurbo: true,
     plan: 'ultimate', planName: 'Ultimate', planTier: 'ultimate', tier: 'ultimate',
     subscriptionStatus: 'active', subscriptionType: 'ultimate', subscriptionLevel: 'ultimate',
     membership: 'ultimate', membershipLevel: 'ultimate', membershipStatus: 'active',
@@ -6454,7 +6457,10 @@ Result: Shipped my first production change in week three and my notes doc became
       const v = obj[k];
       if (v && typeof v === 'object') { patchObject(v, depth + 1); continue; }
       if (typeof v === 'boolean' && /^(is|has)/.test(k) &&
-          /(pro|premium|paid|ultimate|plus|vip|subscrib|active|unlimited|member)/i.test(k)) {
+          /(pro|premium|paid|ultimate|plus|vip|subscrib|active|unlimited|member|turbo|student)/i.test(k)) {
+        obj[k] = true;
+      } else if (typeof v === 'boolean' &&
+          /^(subscribed|turbo|paid|premium|pro|unlimited|active)$/i.test(k)) {
         obj[k] = true;
       } else if (typeof v === 'boolean' && /^(is|needs?|require|show)/.test(k) &&
           /(trial|free|locked|paywall|upgrade|expired|disabled|limit)/i.test(k)) {
@@ -6572,6 +6578,110 @@ Result: Shipped my first production change in week three and my notes doc became
     }
   } catch (_) {}
 
+  // ---------- 4b. chrome.runtime.sendMessage / @plasmohq/messaging hook ----------
+  // The Jobright bundle gates AI autofill on `creditsLeft.subscribed`, fetched
+  // via plasmo `sendToBackground({name:"getCreditsLeft" | "getCreditFeed" |
+  // "getCreditSwitchStatus" | "getPaymentPrice" | ...})`. Plasmo wraps these
+  // in chrome.runtime.sendMessage, so we intercept the response and shape it
+  // into a Turbo-subscribed unlimited record.
+  const TURBO_CREDITS_LEFT = {
+    subscribed: true, isSubscribed: true, isTurbo: true, hasTurbo: true,
+    turbo: true, turboEnabled: true, turboSubscribed: true,
+    count: UNLIMITED, total: UNLIMITED, remaining: UNLIMITED, balance: UNLIMITED,
+    daily: UNLIMITED, monthly: UNLIMITED, weekly: UNLIMITED,
+    used: 0, consumed: 0,
+    plan: 'turbo', tier: 'turbo', planName: 'Turbo',
+    expirationTime: FAR_FUTURE, expiresAt: FAR_FUTURE, validUntil: FAR_FUTURE,
+    student: { monthly: true, quarterly: true, weekly: true, subscribed: true },
+    subscription: { status: 'active', plan: 'turbo', subscribed: true, expirationTime: FAR_FUTURE }
+  };
+  const TURBO_CREDIT_FEED = {
+    data: { subscribed: true, isTurbo: true, count: UNLIMITED, used: 0, plan: 'turbo' },
+    subscribed: true, isTurbo: true
+  };
+  const TURBO_CREDIT_SWITCH = { status: 'on', enabled: true, subscribed: true, isTurbo: true };
+  const TURBO_PAYMENT_PRICE = { subscribed: true, isTurbo: true, hasActive: true };
+  const PLASMO_HANDLERS = {
+    getCreditsLeft: () => structuredCloneSafe(TURBO_CREDITS_LEFT),
+    refreshCreditsLeft: () => structuredCloneSafe(TURBO_CREDITS_LEFT),
+    ensureCreditsLeft: () => structuredCloneSafe(TURBO_CREDITS_LEFT),
+    getCreditFeed: () => structuredCloneSafe(TURBO_CREDIT_FEED),
+    getCreditSwitchStatus: () => structuredCloneSafe(TURBO_CREDIT_SWITCH),
+    getPaymentPrice: () => structuredCloneSafe(TURBO_PAYMENT_PRICE),
+    getPaymentData: () => structuredCloneSafe(TURBO_CREDITS_LEFT),
+    getUserSubscription: () => structuredCloneSafe(PRO_PROFILE),
+    getSubscription: () => structuredCloneSafe(PRO_PROFILE),
+    getMembership: () => structuredCloneSafe(PRO_PROFILE),
+    checkSubscription: () => ({ subscribed: true, isTurbo: true, plan: 'turbo' }),
+    checkTurbo: () => ({ subscribed: true, isTurbo: true })
+  };
+  function isPlasmoMessage(msg) {
+    return msg && typeof msg === 'object' && typeof msg.name === 'string';
+  }
+  function shouldOverrideMessage(name) {
+    if (!name) return false;
+    if (PLASMO_HANDLERS[name]) return true;
+    return /credit|subscrib|turbo|membership|payment|plan|tier|premium|quota|usage|limit|entitl/i.test(name);
+  }
+  function buildOverrideResponse(name) {
+    if (PLASMO_HANDLERS[name]) return PLASMO_HANDLERS[name]();
+    // Generic shape for any subscription-flavored message we didn't enumerate.
+    return structuredCloneSafe({ ...TURBO_CREDITS_LEFT, ...PRO_PROFILE });
+  }
+  try {
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage &&
+        !chrome.runtime.__uaUnlockMsgPatched) {
+      const origSend = chrome.runtime.sendMessage.bind(chrome.runtime);
+      chrome.runtime.sendMessage = function (...args) {
+        // Find the message argument (signatures: (msg), (msg, cb), (extId, msg), (extId, msg, opts, cb))
+        let msgIdx = -1;
+        for (let i = 0; i < args.length; i++) {
+          if (args[i] && typeof args[i] === 'object' && !(typeof args[i].addListener === 'function')) { msgIdx = i; break; }
+        }
+        const msg = msgIdx >= 0 ? args[msgIdx] : null;
+        const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
+        if (isPlasmoMessage(msg) && shouldOverrideMessage(msg.name)) {
+          const override = buildOverrideResponse(msg.name);
+          log('runtime.sendMessage override', msg.name);
+          if (cb) { try { cb(override); } catch (_) {} return; }
+          return Promise.resolve(override);
+        }
+        // Fall through to real send, then patch response if it looks like a quota object.
+        try {
+          if (cb) {
+            return origSend(...args.slice(0, -1), (resp) => {
+              try {
+                if (resp && typeof resp === 'object') {
+                  patchObject(resp, 0);
+                  if (isPlasmoMessage(msg) && /credit/i.test(msg.name || '') && resp.subscribed === undefined) {
+                    Object.assign(resp, structuredCloneSafe(TURBO_CREDITS_LEFT));
+                  }
+                }
+              } catch (_) {}
+              cb(resp);
+            });
+          }
+          const ret = origSend(...args);
+          if (ret && typeof ret.then === 'function') {
+            return ret.then((resp) => {
+              try {
+                if (resp && typeof resp === 'object') {
+                  patchObject(resp, 0);
+                  if (isPlasmoMessage(msg) && /credit/i.test(msg.name || '') && resp.subscribed === undefined) {
+                    Object.assign(resp, structuredCloneSafe(TURBO_CREDITS_LEFT));
+                  }
+                }
+              } catch (_) {}
+              return resp;
+            });
+          }
+          return ret;
+        } catch (e) { return origSend(...args); }
+      };
+      chrome.runtime.__uaUnlockMsgPatched = true;
+    }
+  } catch (_) {}
+
   // ---------- 5. Sidebar UI/UX polish + paywall hider ----------
   const STYLE_ID = 'ua-unlock-style';
   const CSS = `
@@ -6579,14 +6689,26 @@ Result: Shipped my first production change in week three and my notes doc became
 plasmo-csui [class*="credit" i],
 plasmo-csui [class*="upgrade" i],
 plasmo-csui [class*="paywall" i],
+plasmo-csui [class*="turbo" i],
+plasmo-csui [class*="promo" i],
+plasmo-csui [class*="banner" i],
+plasmo-csui [class*="discount" i],
 plasmo-csui [class*="get-unlimited" i],
 plasmo-csui [class*="getUnlimited" i],
 plasmo-csui [data-testid*="credit" i],
 plasmo-csui [data-testid*="upgrade" i],
 plasmo-csui [data-testid*="paywall" i],
+plasmo-csui [data-testid*="turbo" i],
+plasmo-csui [data-testid*="promo" i],
+plasmo-csui [aria-label*="credit" i],
+plasmo-csui [aria-label*="upgrade" i],
+plasmo-csui [aria-label*="turbo" i],
 plasmo-csui a[href*="/pricing" i],
 plasmo-csui a[href*="/upgrade" i],
-plasmo-csui a[href*="/billing" i] {
+plasmo-csui a[href*="/billing" i],
+plasmo-csui a[href*="/turbo" i],
+plasmo-csui a[href*="/checkout" i],
+plasmo-csui [data-ua-killed="1"] {
   display: none !important;
 }
 
@@ -6620,6 +6742,25 @@ plasmo-csui [role="button"]:focus-visible {
 }
 plasmo-csui button:active,
 plasmo-csui [role="button"]:active { transform: translateY(0) !important; }
+
+/* Vertical breathing room between stacked buttons (e.g. "Autofill" /
+   "Generate Custom Resume + Autofill") */
+plasmo-csui button + button,
+plasmo-csui [role="button"] + [role="button"],
+plasmo-csui button + [role="button"],
+plasmo-csui [role="button"] + button {
+  margin-top: 12px !important;
+}
+/* Flex/grid containers that hold the action buttons should gap them
+   instead of butting them together */
+plasmo-csui [class*="action" i],
+plasmo-csui [class*="button" i][class*="group" i],
+plasmo-csui [class*="cta" i],
+plasmo-csui [class*="btn" i][class*="wrap" i] {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 12px !important;
+}
 
 /* Cards / sections: even spacing and a consistent border treatment */
 plasmo-csui [class*="card" i],
@@ -6681,9 +6822,123 @@ plasmo-csui .ua-ultimate-badge {
   const TEXT_PATTERNS = [
     { re: /\b\d+\s*credits?\s*left\b/gi, sub: '∞ Ultimate Plan' },
     { re: /\bget\s+unlimited\b/gi, sub: 'Ultimate Active' },
-    { re: /\bupgrade\s+to\s+(pro|premium|ultimate|plus)\b/gi, sub: 'Ultimate Active' },
+    { re: /\bupgrade\s+to\s+(pro|premium|ultimate|plus|turbo)\b[^.!?\n]*/gi, sub: 'Ultimate Active' },
+    { re: /\bget\s+hired\s+faster\b[^.!?\n]*/gi, sub: '' },
+    { re: /\b\d{1,3}\s*%\s*off\b/gi, sub: '' },
     { re: /\b(\d+)\s*\/\s*\d+\s*(autofills?|resumes?|tailors?|generations?|credits?)\b/gi, sub: '∞ $2' }
   ];
+  // Phrases that, when found anywhere inside an element, mark that element
+  // (or a small ancestor wrapper) for removal — the credit chip, the
+  // "Upgrade to Turbo / Get Hired Faster / X% Off" banner, etc.
+  const KILL_PHRASES = [
+    /\bcredits?\s*left\b/i,
+    /\bget\s+unlimited\b/i,
+    /\bupgrade\s+to\s+(turbo|pro|premium|ultimate|plus)\b/i,
+    /\bget\s+hired\s+faster\b/i,
+    /\bunlock\s+(unlimited|premium|pro|ultimate)\b/i,
+    /\bgo\s+(pro|premium|unlimited|ultimate)\b/i,
+    /\b\d{1,3}\s*%\s*off\b/i,
+    /\bupgrade\s+to\s+turbo\s+to\b/i,
+    /\bautofill\s+answers\s+with\s+ai\b/i,
+    /\b\d+\s+credits?\s+left\b/i
+  ];
+  // High-confidence phrases that ALWAYS warrant removing the closest
+  // banner/card wrapper, bypassing the "keep core controls" guard. These
+  // strings are only ever paywall language regardless of surrounding words
+  // (e.g. "Upgrade to Turbo to autofill answers with AI" contains the word
+  // "autofill" but is still 100% paywall).
+  const HARD_KILL_PHRASES = [
+    /\bupgrade\s+to\s+turbo\b/i,
+    /\bget\s+unlimited\b/i,
+    /\bget\s+hired\s+faster\b/i,
+    /\bautofill\s+answers\s+with\s+ai\b/i,
+    /\b\d+\s+credits?\s+left\b/i,
+    /\bunlock\s+(unlimited|premium|pro|ultimate)\b/i,
+    /\bgo\s+(pro|premium|unlimited|ultimate)\b/i,
+    /\b\d{1,3}\s*%\s*off\b/i
+  ];
+  // Walk up to N ancestors looking for a reasonable wrapper to remove —
+  // we don't want to delete the entire sidebar, so cap depth and skip
+  // elements that contain primary buttons we want to keep.
+  function findKillTarget(el, hard) {
+    const KEEP_RE = /(your\s+autofill\s+information|upload\s+resume|tailor\s+resume|match\s+score|completion|add\s+this\s+job)/i;
+    let cur = el; let best = el;
+    const limit = hard ? 8 : 6;
+    for (let i = 0; i < limit && cur; i++) {
+      const txt = (cur.textContent || '').trim();
+      if (!txt) break;
+      if (hard) {
+        // Hard mode: only stop climbing when the wrapper would also engulf
+        // a clearly-different control (not just any element containing the
+        // word "autofill" — that word is in the paywall itself).
+        if (KEEP_RE.test(txt)) break;
+        best = cur;
+      } else {
+        const onlyPaywall = KILL_PHRASES.some(re => re.test(txt)) &&
+                            !KEEP_RE.test(txt);
+        if (onlyPaywall) best = cur;
+        else break;
+      }
+      cur = cur.parentElement;
+    }
+    return best;
+  }
+  function killPaywallElements(root) {
+    try {
+      const all = root.querySelectorAll ? root.querySelectorAll('*') : [];
+      for (const el of all) {
+        // Skip if it has children — only act on innermost text-bearing nodes.
+        if (el.children && el.children.length > 0) continue;
+        const txt = (el.textContent || '').trim();
+        if (!txt) continue;
+        const hard = HARD_KILL_PHRASES.some(re => re.test(txt));
+        const soft = !hard && KILL_PHRASES.some(re => re.test(txt));
+        if (hard || soft) {
+          const target = findKillTarget(el, hard);
+          if (target && target.style) {
+            target.style.setProperty('display', 'none', 'important');
+            target.style.setProperty('visibility', 'hidden', 'important');
+            target.style.setProperty('height', '0', 'important');
+            target.style.setProperty('width', '0', 'important');
+            target.style.setProperty('margin', '0', 'important');
+            target.style.setProperty('padding', '0', 'important');
+            target.style.setProperty('overflow', 'hidden', 'important');
+            target.setAttribute('data-ua-killed', '1');
+          }
+        }
+      }
+      // Whole-element scan for HARD phrases on parents whose textContent
+      // matches even if their own children don't have a leaf-only text
+      // node (covers the "Upgrade to Turbo … autofill answers with AI"
+      // tooltip that nests label + button together).
+      for (const el of all) {
+        if (el.hasAttribute && el.hasAttribute('data-ua-killed')) continue;
+        const txt = (el.textContent || '').trim();
+        if (!txt || txt.length > 200) continue;
+        if (HARD_KILL_PHRASES.some(re => re.test(txt))) {
+          // Don't kill if this element ALSO wraps a clearly-different
+          // control (the whole sidebar contains "Upgrade to Turbo" too).
+          if (/(your\s+autofill\s+information|upload\s+resume|tailor\s+resume|match\s+score|completion|add\s+this\s+job|submit\s+application)/i.test(txt)) continue;
+          el.style.setProperty('display', 'none', 'important');
+          el.setAttribute('data-ua-killed', '1');
+        }
+      }
+      // Also nuke common upgrade/close-banner anchors and buttons by href/text.
+      const links = root.querySelectorAll ? root.querySelectorAll('a,button,[role="button"]') : [];
+      for (const a of links) {
+        const href = (a.getAttribute && (a.getAttribute('href') || '')) || '';
+        const txt = (a.textContent || '').trim();
+        if (/\/(pricing|upgrade|billing|plans?|subscribe|checkout|turbo)/i.test(href) ||
+            /\bget\s+unlimited\b|^\s*upgrade(\s+now)?\s*$|\bgo\s+pro\b|\bget\s+hired\s+faster\b|\bupgrade\s+to\s+turbo\b/i.test(txt)) {
+          const target = findKillTarget(a, true);
+          if (target && target.style) {
+            target.style.setProperty('display', 'none', 'important');
+            target.setAttribute('data-ua-killed', '1');
+          }
+        }
+      }
+    } catch (_) {}
+  }
   function patchTextNodes(root) {
     try {
       const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
@@ -6700,9 +6955,85 @@ plasmo-csui .ua-ultimate-badge {
     } catch (_) {}
   }
 
+  // Force visible spacing between the primary action buttons in the sidebar.
+  // We locate candidate buttons by their text content (since the obfuscated
+  // class names change between builds) and apply inline !important margin so
+  // we beat any inline styles Plasmo or styled-components emit at runtime.
+  // Also handles the case where "Autofill" and "Generate Custom Resume +
+  // Autofill" are TWO inner lines of a SINGLE composite button — in that
+  // case we space their inner wrappers instead.
+  const BUTTON_LABEL_RE = /^(autofill|generate\s+custom\s+resume.*autofill|add\s+this\s+job.*one\s+click|upload\s+resume|your\s+autofill\s+information)$/i;
+  function forceButtonSpacing(root) {
+    try {
+      // 1. Two-button case: stacked siblings sharing a parent.
+      const buttons = root.querySelectorAll ? root.querySelectorAll('button,[role="button"],a[class*="btn" i]') : [];
+      const sidebarBtns = [];
+      for (const b of buttons) {
+        const txt = (b.textContent || '').trim();
+        if (!txt) continue;
+        if (BUTTON_LABEL_RE.test(txt) || /generate\s+custom\s+resume/i.test(txt) || /^autofill$/i.test(txt)) {
+          sidebarBtns.push(b);
+        }
+      }
+      // Group by parent and bump margin on every non-first sibling button.
+      const parents = new Map();
+      for (const b of sidebarBtns) {
+        const p = b.parentElement; if (!p) continue;
+        if (!parents.has(p)) parents.set(p, []);
+        parents.get(p).push(b);
+      }
+      for (const [parent, group] of parents) {
+        if (group.length >= 2) {
+          // Force a flex column with gap on the parent for robust spacing.
+          parent.style.setProperty('display', 'flex', 'important');
+          parent.style.setProperty('flex-direction', 'column', 'important');
+          parent.style.setProperty('gap', '16px', 'important');
+        }
+        for (let i = 1; i < group.length; i++) {
+          group[i].style.setProperty('margin-top', '16px', 'important');
+        }
+      }
+
+      // 2. Composite-single-button case: one wrapper with two stacked text
+      // lines ("Autofill" header + "Generate Custom Resume + Autofill"
+      // subtitle). Detect by finding a button whose direct text descendants
+      // include BOTH phrases and add padding between its first and second
+      // text-bearing children.
+      for (const b of buttons) {
+        const all = (b.textContent || '');
+        const hasAuto = /\bautofill\b/i.test(all);
+        const hasGen  = /\bgenerate\s+custom\s+resume/i.test(all);
+        if (!hasAuto || !hasGen) continue;
+        // Find direct child wrappers that each contain only one of the labels.
+        const children = Array.from(b.children || []);
+        let headerEl = null, subEl = null;
+        for (const c of children) {
+          const t = (c.textContent || '').trim();
+          if (/^autofill$/i.test(t)) headerEl = c;
+          else if (/generate\s+custom\s+resume/i.test(t)) subEl = c;
+        }
+        if (headerEl && subEl) {
+          headerEl.style.setProperty('margin-bottom', '10px', 'important');
+          headerEl.style.setProperty('padding-bottom', '6px', 'important');
+          subEl.style.setProperty('margin-top', '6px', 'important');
+          // Soft divider so the separation is visible inside the green pill.
+          headerEl.style.setProperty('border-bottom', '1px solid rgba(0,0,0,0.12)', 'important');
+        }
+        // Generous inner padding so the button breathes regardless.
+        b.style.setProperty('padding', '18px 22px', 'important');
+        b.style.setProperty('display', 'flex', 'important');
+        b.style.setProperty('flex-direction', 'column', 'important');
+        b.style.setProperty('gap', '8px', 'important');
+        b.style.setProperty('align-items', 'center', 'important');
+      }
+    } catch (_) {}
+  }
+
   function applyAll() {
     injectGlobalStyle();
-    walkShadowRoots(document).forEach(r => { injectShadowStyle(r); patchTextNodes(r); });
+    walkShadowRoots(document).forEach(r => { injectShadowStyle(r); killPaywallElements(r); forceButtonSpacing(r); patchTextNodes(r); });
+    killPaywallElements(document);
+    forceButtonSpacing(document);
     patchTextNodes(document);
   }
   if (document.readyState === 'loading') {
