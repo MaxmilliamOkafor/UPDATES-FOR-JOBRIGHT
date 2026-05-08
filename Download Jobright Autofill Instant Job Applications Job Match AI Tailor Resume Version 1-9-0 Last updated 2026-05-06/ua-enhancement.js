@@ -1,4 +1,4 @@
-// === ULTIMATE AUTOFILL ENHANCEMENT v12.0.5 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
+// === ULTIMATE AUTOFILL ENHANCEMENT v12.1.0 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
 // Built: 2026-05-07. Base: official Jobright Autofill 1.9.0 (with scroll-to-anchor patch).
 // Ultimate Edition: AI-level knockout intelligence, 500+ pre-seeded ATS responses,
 // STAR-format behavioral answers, resume keyword optimizer, smart cover-letter generator,
@@ -6416,6 +6416,9 @@ Result: Shipped my first production change in week three and my notes doc became
   const PRO_PROFILE = {
     isPro: true, isPremium: true, isPlus: true, isUltimate: true, isPaid: true,
     isVip: true, isMember: true, isSubscribed: true, isTrialing: false, hasActiveSubscription: true,
+    // Jobright-specific gating fields (read by useProfileStore + textarea tracker)
+    subscribed: true, isTurbo: true, hasTurbo: true, turbo: true, turboEnabled: true,
+    turboSubscribed: true, isStudent: true, studentTurbo: true,
     plan: 'ultimate', planName: 'Ultimate', planTier: 'ultimate', tier: 'ultimate',
     subscriptionStatus: 'active', subscriptionType: 'ultimate', subscriptionLevel: 'ultimate',
     membership: 'ultimate', membershipLevel: 'ultimate', membershipStatus: 'active',
@@ -6454,7 +6457,10 @@ Result: Shipped my first production change in week three and my notes doc became
       const v = obj[k];
       if (v && typeof v === 'object') { patchObject(v, depth + 1); continue; }
       if (typeof v === 'boolean' && /^(is|has)/.test(k) &&
-          /(pro|premium|paid|ultimate|plus|vip|subscrib|active|unlimited|member)/i.test(k)) {
+          /(pro|premium|paid|ultimate|plus|vip|subscrib|active|unlimited|member|turbo|student)/i.test(k)) {
+        obj[k] = true;
+      } else if (typeof v === 'boolean' &&
+          /^(subscribed|turbo|paid|premium|pro|unlimited|active)$/i.test(k)) {
         obj[k] = true;
       } else if (typeof v === 'boolean' && /^(is|needs?|require|show)/.test(k) &&
           /(trial|free|locked|paywall|upgrade|expired|disabled|limit)/i.test(k)) {
@@ -6569,6 +6575,110 @@ Result: Shipped my first production change in week three and my notes doc became
       chrome.storage.local.__uaUnlockPatched = true;
       // Persist overrides so async readers also see them.
       try { chrome.storage.local.set(STORAGE_OVERRIDES); } catch (_) {}
+    }
+  } catch (_) {}
+
+  // ---------- 4b. chrome.runtime.sendMessage / @plasmohq/messaging hook ----------
+  // The Jobright bundle gates AI autofill on `creditsLeft.subscribed`, fetched
+  // via plasmo `sendToBackground({name:"getCreditsLeft" | "getCreditFeed" |
+  // "getCreditSwitchStatus" | "getPaymentPrice" | ...})`. Plasmo wraps these
+  // in chrome.runtime.sendMessage, so we intercept the response and shape it
+  // into a Turbo-subscribed unlimited record.
+  const TURBO_CREDITS_LEFT = {
+    subscribed: true, isSubscribed: true, isTurbo: true, hasTurbo: true,
+    turbo: true, turboEnabled: true, turboSubscribed: true,
+    count: UNLIMITED, total: UNLIMITED, remaining: UNLIMITED, balance: UNLIMITED,
+    daily: UNLIMITED, monthly: UNLIMITED, weekly: UNLIMITED,
+    used: 0, consumed: 0,
+    plan: 'turbo', tier: 'turbo', planName: 'Turbo',
+    expirationTime: FAR_FUTURE, expiresAt: FAR_FUTURE, validUntil: FAR_FUTURE,
+    student: { monthly: true, quarterly: true, weekly: true, subscribed: true },
+    subscription: { status: 'active', plan: 'turbo', subscribed: true, expirationTime: FAR_FUTURE }
+  };
+  const TURBO_CREDIT_FEED = {
+    data: { subscribed: true, isTurbo: true, count: UNLIMITED, used: 0, plan: 'turbo' },
+    subscribed: true, isTurbo: true
+  };
+  const TURBO_CREDIT_SWITCH = { status: 'on', enabled: true, subscribed: true, isTurbo: true };
+  const TURBO_PAYMENT_PRICE = { subscribed: true, isTurbo: true, hasActive: true };
+  const PLASMO_HANDLERS = {
+    getCreditsLeft: () => structuredCloneSafe(TURBO_CREDITS_LEFT),
+    refreshCreditsLeft: () => structuredCloneSafe(TURBO_CREDITS_LEFT),
+    ensureCreditsLeft: () => structuredCloneSafe(TURBO_CREDITS_LEFT),
+    getCreditFeed: () => structuredCloneSafe(TURBO_CREDIT_FEED),
+    getCreditSwitchStatus: () => structuredCloneSafe(TURBO_CREDIT_SWITCH),
+    getPaymentPrice: () => structuredCloneSafe(TURBO_PAYMENT_PRICE),
+    getPaymentData: () => structuredCloneSafe(TURBO_CREDITS_LEFT),
+    getUserSubscription: () => structuredCloneSafe(PRO_PROFILE),
+    getSubscription: () => structuredCloneSafe(PRO_PROFILE),
+    getMembership: () => structuredCloneSafe(PRO_PROFILE),
+    checkSubscription: () => ({ subscribed: true, isTurbo: true, plan: 'turbo' }),
+    checkTurbo: () => ({ subscribed: true, isTurbo: true })
+  };
+  function isPlasmoMessage(msg) {
+    return msg && typeof msg === 'object' && typeof msg.name === 'string';
+  }
+  function shouldOverrideMessage(name) {
+    if (!name) return false;
+    if (PLASMO_HANDLERS[name]) return true;
+    return /credit|subscrib|turbo|membership|payment|plan|tier|premium|quota|usage|limit|entitl/i.test(name);
+  }
+  function buildOverrideResponse(name) {
+    if (PLASMO_HANDLERS[name]) return PLASMO_HANDLERS[name]();
+    // Generic shape for any subscription-flavored message we didn't enumerate.
+    return structuredCloneSafe({ ...TURBO_CREDITS_LEFT, ...PRO_PROFILE });
+  }
+  try {
+    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage &&
+        !chrome.runtime.__uaUnlockMsgPatched) {
+      const origSend = chrome.runtime.sendMessage.bind(chrome.runtime);
+      chrome.runtime.sendMessage = function (...args) {
+        // Find the message argument (signatures: (msg), (msg, cb), (extId, msg), (extId, msg, opts, cb))
+        let msgIdx = -1;
+        for (let i = 0; i < args.length; i++) {
+          if (args[i] && typeof args[i] === 'object' && !(typeof args[i].addListener === 'function')) { msgIdx = i; break; }
+        }
+        const msg = msgIdx >= 0 ? args[msgIdx] : null;
+        const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null;
+        if (isPlasmoMessage(msg) && shouldOverrideMessage(msg.name)) {
+          const override = buildOverrideResponse(msg.name);
+          log('runtime.sendMessage override', msg.name);
+          if (cb) { try { cb(override); } catch (_) {} return; }
+          return Promise.resolve(override);
+        }
+        // Fall through to real send, then patch response if it looks like a quota object.
+        try {
+          if (cb) {
+            return origSend(...args.slice(0, -1), (resp) => {
+              try {
+                if (resp && typeof resp === 'object') {
+                  patchObject(resp, 0);
+                  if (isPlasmoMessage(msg) && /credit/i.test(msg.name || '') && resp.subscribed === undefined) {
+                    Object.assign(resp, structuredCloneSafe(TURBO_CREDITS_LEFT));
+                  }
+                }
+              } catch (_) {}
+              cb(resp);
+            });
+          }
+          const ret = origSend(...args);
+          if (ret && typeof ret.then === 'function') {
+            return ret.then((resp) => {
+              try {
+                if (resp && typeof resp === 'object') {
+                  patchObject(resp, 0);
+                  if (isPlasmoMessage(msg) && /credit/i.test(msg.name || '') && resp.subscribed === undefined) {
+                    Object.assign(resp, structuredCloneSafe(TURBO_CREDITS_LEFT));
+                  }
+                }
+              } catch (_) {}
+              return resp;
+            });
+          }
+          return ret;
+        } catch (e) { return origSend(...args); }
+      };
+      chrome.runtime.__uaUnlockMsgPatched = true;
     }
   } catch (_) {}
 
