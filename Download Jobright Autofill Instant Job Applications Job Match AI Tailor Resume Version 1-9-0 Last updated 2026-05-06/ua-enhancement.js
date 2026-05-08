@@ -1,4 +1,4 @@
-// === ULTIMATE AUTOFILL ENHANCEMENT v12.2.0 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
+// === ULTIMATE AUTOFILL ENHANCEMENT v12.2.1 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
 // Built: 2026-05-07. Base: official Jobright Autofill 1.9.0 (with scroll-to-anchor patch).
 // Ultimate Edition: AI-level knockout intelligence, 500+ pre-seeded ATS responses,
 // STAR-format behavioral answers, resume keyword optimizer, smart cover-letter generator,
@@ -6683,126 +6683,81 @@ Result: Shipped my first production change in week three and my notes doc became
   } catch (_) {}
 
   // ---------- 5. Sidebar UI/UX polish + paywall hider ----------
+  // IMPORTANT: Jobright uses <plasmo-csui> for many UI fragments on
+  // jobright.ai itself (job-card overlays, "Fresh < 24h" badges, ASK ORION
+  // chips, APPLY WITH AUTOFILL buttons, match-score cards). Scoping styles
+  // to plasmo-csui therefore deforms the main jobright.ai layout. Instead
+  // we identify the actual SIDEBAR shadow root by content and inject the
+  // polish ONLY there, without the plasmo-csui prefix.
   const STYLE_ID = 'ua-unlock-style';
-  const CSS = `
-/* Hide credit counters, upgrade banners, paywalls inside the Jobright sidebar */
-plasmo-csui [class*="credit" i],
-plasmo-csui [class*="upgrade" i],
-plasmo-csui [class*="paywall" i],
-plasmo-csui [class*="turbo" i],
-plasmo-csui [class*="promo" i],
-plasmo-csui [class*="banner" i],
-plasmo-csui [class*="discount" i],
-plasmo-csui [class*="get-unlimited" i],
-plasmo-csui [class*="getUnlimited" i],
-plasmo-csui [data-testid*="credit" i],
-plasmo-csui [data-testid*="upgrade" i],
-plasmo-csui [data-testid*="paywall" i],
-plasmo-csui [data-testid*="turbo" i],
-plasmo-csui [data-testid*="promo" i],
-plasmo-csui [aria-label*="credit" i],
-plasmo-csui [aria-label*="upgrade" i],
-plasmo-csui [aria-label*="turbo" i],
-plasmo-csui a[href*="/pricing" i],
-plasmo-csui a[href*="/upgrade" i],
-plasmo-csui a[href*="/billing" i],
-plasmo-csui a[href*="/turbo" i],
-plasmo-csui a[href*="/checkout" i],
-plasmo-csui [data-ua-killed="1"] {
-  display: none !important;
-}
-
-/* Professional typography + spacing inside the sidebar shadow root host */
-plasmo-csui {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
-  -webkit-font-smoothing: antialiased;
-}
-
-/* Buttons: consistent radius, padding, focus ring, hover lift */
-plasmo-csui button,
-plasmo-csui [role="button"] {
-  border-radius: 12px !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.01em !important;
-  padding: 12px 18px !important;
-  transition: transform 120ms ease, box-shadow 120ms ease, background-color 120ms ease !important;
-  min-height: 44px !important;
-  line-height: 1.25 !important;
-  cursor: pointer !important;
-}
-plasmo-csui button:hover,
-plasmo-csui [role="button"]:hover {
-  transform: translateY(-1px) !important;
-  box-shadow: 0 6px 16px rgba(0,0,0,0.18) !important;
-}
-plasmo-csui button:focus-visible,
-plasmo-csui [role="button"]:focus-visible {
-  outline: 2px solid #6cf5b8 !important;
-  outline-offset: 2px !important;
-}
-plasmo-csui button:active,
-plasmo-csui [role="button"]:active { transform: translateY(0) !important; }
-
-/* Vertical breathing room between stacked buttons (e.g. "Autofill" /
-   "Generate Custom Resume + Autofill") */
-plasmo-csui button + button,
-plasmo-csui [role="button"] + [role="button"],
-plasmo-csui button + [role="button"],
-plasmo-csui [role="button"] + button {
-  margin-top: 12px !important;
-}
-/* Flex/grid containers that hold the action buttons should gap them
-   instead of butting them together */
-plasmo-csui [class*="action" i],
-plasmo-csui [class*="button" i][class*="group" i],
-plasmo-csui [class*="cta" i],
-plasmo-csui [class*="btn" i][class*="wrap" i] {
-  display: flex !important;
-  flex-direction: column !important;
-  gap: 12px !important;
-}
-
-/* Cards / sections: even spacing and a consistent border treatment */
-plasmo-csui [class*="card" i],
-plasmo-csui [class*="section" i],
-plasmo-csui [class*="panel" i] {
-  border-radius: 14px !important;
-  padding: 16px !important;
-  margin-bottom: 12px !important;
-}
-
-/* Progress bar: smoother, taller, animated */
-plasmo-csui [class*="progress" i],
-plasmo-csui progress {
-  height: 8px !important;
-  border-radius: 999px !important;
-  overflow: hidden !important;
-}
-
-/* Replace the credit chip area with a clean "Ultimate" badge */
-plasmo-csui .ua-ultimate-badge {
-  display: inline-flex !important;
-  align-items: center !important;
-  gap: 6px !important;
-  padding: 6px 12px !important;
-  border-radius: 999px !important;
-  background: linear-gradient(135deg, #6cf5b8 0%, #2bb673 100%) !important;
-  color: #062b1c !important;
-  font-weight: 700 !important;
-  font-size: 12px !important;
-  letter-spacing: 0.02em !important;
-}
+  const KILL_CSS = `
+/* Hide elements the killer JS marked as paywall — sidebar-only via JS;
+   data attribute scoping keeps this from touching the main page. */
+[data-ua-killed="1"] { display: none !important; }
 `;
+  const SIDEBAR_CSS = `
+/* Sidebar polish — injected only into the Jobright autofill sidebar
+   shadow root, not into any other plasmo-csui fragments on the page. */
+:host { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important; -webkit-font-smoothing: antialiased; }
+
+/* Hide credit/upgrade chrome by class/data/href */
+[class*="credit" i],
+[class*="upgrade" i],
+[class*="paywall" i],
+[class*="turbo" i],
+[class*="get-unlimited" i],
+[class*="getUnlimited" i],
+[data-testid*="credit" i],
+[data-testid*="upgrade" i],
+[data-testid*="paywall" i],
+[data-testid*="turbo" i],
+[aria-label*="credit" i],
+[aria-label*="upgrade" i],
+[aria-label*="turbo" i],
+a[href*="/pricing" i],
+a[href*="/upgrade" i],
+a[href*="/billing" i],
+a[href*="/turbo" i],
+a[href*="/checkout" i],
+[data-ua-killed="1"] { display: none !important; }
+
+/* Vertical breathing room between stacked sidebar action buttons
+   (e.g. "Autofill" + "Generate Custom Resume + Autofill"). Scoped to
+   the sidebar root so it doesn't reach jobright.ai's job cards. */
+button + button,
+[role="button"] + [role="button"],
+button + [role="button"],
+[role="button"] + button { margin-top: 12px !important; }
+`;
+  // Track which shadow roots host the actual sidebar (vs. job-card chips).
+  const SIDEBAR_ROOTS = new WeakSet();
+  function looksLikeSidebar(root) {
+    try {
+      const txt = (root.textContent || '');
+      // The sidebar always contains both the Jobright header chrome and
+      // at least one of these labels. Job-card overlays don't.
+      const hits = [
+        /your\s+autofill\s+information/i,
+        /add\s+this\s+job\s+in\s+one\s+click/i,
+        /upload\s+resume/i,
+        /generate\s+custom\s+resume/i
+      ];
+      let n = 0; for (const re of hits) if (re.test(txt)) n++;
+      return n >= 2;
+    } catch (_) { return false; }
+  }
   function injectGlobalStyle() {
     if (document.getElementById(STYLE_ID)) return;
     const s = document.createElement('style');
-    s.id = STYLE_ID; s.textContent = CSS;
+    s.id = STYLE_ID; s.textContent = KILL_CSS;
     (document.head || document.documentElement).appendChild(s);
   }
   function injectShadowStyle(root) {
-    if (!root || !root.querySelector || root.getElementById?.(STYLE_ID)) return;
+    if (!root || !root.querySelector) return;
     if ([...root.childNodes].some(n => n.id === STYLE_ID)) return;
-    const s = document.createElement('style'); s.id = STYLE_ID; s.textContent = CSS;
+    if (!looksLikeSidebar(root)) return; // skip job-card / badge shadows
+    SIDEBAR_ROOTS.add(root);
+    const s = document.createElement('style'); s.id = STYLE_ID; s.textContent = SIDEBAR_CSS;
     root.appendChild(s);
   }
   function walkShadowRoots(node) {
@@ -7031,10 +6986,24 @@ plasmo-csui .ua-ultimate-badge {
 
   function applyAll() {
     injectGlobalStyle();
-    walkShadowRoots(document).forEach(r => { injectShadowStyle(r); killPaywallElements(r); forceButtonSpacing(r); patchTextNodes(r); });
+    // Per shadow root: only style + run sidebar-specific JS inside the
+    // actual sidebar. Job-card overlays / Fresh chips / match-score cards
+    // are also hosted in plasmo-csui shadow roots, so we skip them.
+    walkShadowRoots(document).forEach(r => {
+      injectShadowStyle(r);
+      if (looksLikeSidebar(r)) {
+        killPaywallElements(r);
+        forceButtonSpacing(r);
+        patchTextNodes(r);
+      }
+    });
+    // Document scope: only kill clearly-paywall floating widgets (the
+    // "Upgrade to Turbo to autofill answers with AI" tooltip lives in
+    // the page DOM). The HARD_KILL_PHRASES list is specific enough to
+    // avoid touching legitimate jobright.ai job-listing UI.
     killPaywallElements(document);
-    forceButtonSpacing(document);
-    patchTextNodes(document);
+    // Don't run forceButtonSpacing / patchTextNodes on the main document
+    // — they were causing the job-card deformation on jobright.ai.
   }
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', applyAll, { once: true });
