@@ -1,4 +1,4 @@
-// === ULTIMATE AUTOFILL ENHANCEMENT v12.1.0 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
+// === ULTIMATE AUTOFILL ENHANCEMENT v12.2.0 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
 // Built: 2026-05-07. Base: official Jobright Autofill 1.9.0 (with scroll-to-anchor patch).
 // Ultimate Edition: AI-level knockout intelligence, 500+ pre-seeded ATS responses,
 // STAR-format behavioral answers, resume keyword optimizer, smart cover-letter generator,
@@ -7047,4 +7047,245 @@ plasmo-csui .ua-ultimate-badge {
   } catch (_) {}
 
   log('Ultimate unlock + UI polish active');
+})();
+
+// ===================== PROFILE IMPORT / EXPORT (JSON) =====================
+// Injects "Import JSON" / "Export JSON" buttons into the "Your Autofill
+// Information" modal so the user can save their profile to disk and reload
+// it without retyping. Cycles through every tab (Personal, Education, Work
+// Experience, Skill, Equal Employment, Preference) to capture all fields.
+(function () {
+  'use strict';
+  const TAG = '[UA-PROFILE]';
+  const log = (...a) => { try { console.log(TAG, ...a); } catch (_) {} };
+  const TAB_NAMES = ['Personal','Education','Work Experience','Skill','Equal Employment','Preference'];
+  const STORAGE_KEY = 'ua_profile_snapshot';
+  const BTN_ID = 'ua-profile-io';
+
+  // Native value setters that bypass React's synthetic re-render guard.
+  const inputSetter  = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,    'value')?.set;
+  const taSetter     = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  const selectSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,   'value')?.set;
+  function setReactValue(el, v) {
+    try {
+      const tag = (el.tagName || '').toUpperCase();
+      const setter = tag === 'TEXTAREA' ? taSetter : tag === 'SELECT' ? selectSetter : inputSetter;
+      if (setter) setter.call(el, v); else el.value = v;
+      el.dispatchEvent(new Event('input',  { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      el.dispatchEvent(new Event('blur',   { bubbles: true }));
+    } catch (_) {}
+  }
+
+  function deepQueryAll(sel, root) {
+    const out = [];
+    const stack = [root || document];
+    while (stack.length) {
+      const cur = stack.pop(); if (!cur) continue;
+      try { if (cur.querySelectorAll) cur.querySelectorAll(sel).forEach(e => out.push(e)); } catch (_) {}
+      const kids = cur.children || [];
+      for (let i = 0; i < kids.length; i++) {
+        const c = kids[i];
+        if (c.shadowRoot) stack.push(c.shadowRoot);
+        stack.push(c);
+      }
+    }
+    return out;
+  }
+  function findModal() {
+    const headers = deepQueryAll('h1,h2,h3,h4,div,span').filter(el =>
+      /^your\s+autofill\s+information$/i.test((el.textContent || '').trim()) &&
+      el.children.length === 0
+    );
+    for (const h of headers) {
+      let cur = h;
+      for (let i = 0; i < 8 && cur; i++) {
+        // A modal/card wrapper that also contains the tab labels.
+        if ((cur.textContent || '').includes('Personal') &&
+            (cur.textContent || '').includes('Education') &&
+            (cur.textContent || '').includes('Update')) {
+          return cur;
+        }
+        cur = cur.parentElement;
+      }
+    }
+    return null;
+  }
+  function findTabElement(modal, name) {
+    const all = modal.querySelectorAll('*');
+    for (const el of all) {
+      if (el.children.length === 0 &&
+          (el.textContent || '').trim().toLowerCase() === name.toLowerCase()) {
+        // Climb to the clickable wrapper.
+        let c = el;
+        for (let i = 0; i < 4 && c; i++) {
+          if (c.getAttribute && (c.getAttribute('role') === 'tab' || c.tagName === 'BUTTON' ||
+              /tab|menu|item/i.test(c.className || ''))) return c;
+          c = c.parentElement;
+        }
+        return el.parentElement || el;
+      }
+    }
+    return null;
+  }
+  function getActiveTabName(modal) {
+    for (const name of TAB_NAMES) {
+      const el = findTabElement(modal, name);
+      if (!el) continue;
+      const cls = (el.className || '') + ' ' + ((el.parentElement?.className) || '');
+      if (/active|selected|current/i.test(cls) || el.getAttribute?.('aria-selected') === 'true') return name;
+    }
+    return null;
+  }
+  function labelFor(input) {
+    if (input.id) {
+      const lab = document.querySelector('label[for="' + CSS.escape(input.id) + '"]');
+      if (lab && lab.textContent) return lab.textContent.trim().replace(/^\*+/, '').trim();
+    }
+    if (input.placeholder) return input.placeholder.trim();
+    if (input.name) return input.name.trim();
+    if (input.getAttribute && input.getAttribute('aria-label')) return input.getAttribute('aria-label').trim();
+    // Walk up looking for a sibling label/heading text.
+    let cur = input;
+    for (let i = 0; i < 5 && cur; i++) {
+      const prev = cur.previousElementSibling;
+      if (prev && prev.textContent && prev.textContent.trim()) {
+        return prev.textContent.trim().replace(/^\*+/, '').trim();
+      }
+      cur = cur.parentElement;
+    }
+    return '';
+  }
+  function snapshotVisible(modal) {
+    const fields = {};
+    const inputs = modal.querySelectorAll('input, textarea, select');
+    for (const el of inputs) {
+      if (el.type === 'file' || el.type === 'submit' || el.type === 'button' || el.type === 'hidden') continue;
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue; // skip offscreen tabs
+      const key = labelFor(el);
+      if (!key) continue;
+      let val = el.value;
+      if (el.type === 'checkbox' || el.type === 'radio') val = !!el.checked;
+      if (val === undefined || val === null || val === '') continue;
+      fields[key] = val;
+    }
+    return fields;
+  }
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  async function exportProfile() {
+    const modal = findModal();
+    if (!modal) { alert('Open "Your Autofill information" first.'); return; }
+    const original = getActiveTabName(modal);
+    const out = { _meta: { app: 'Jobright Autofill Ultimate', exportedAt: new Date().toISOString(), version: '1.9.0' } };
+    for (const name of TAB_NAMES) {
+      const tab = findTabElement(modal, name);
+      if (!tab) continue;
+      try { tab.click(); } catch (_) {}
+      await sleep(220);
+      out[name] = snapshotVisible(modal);
+    }
+    if (original) { const t = findTabElement(modal, original); if (t) try { t.click(); } catch (_) {} }
+    try { chrome.storage.local.set({ [STORAGE_KEY]: out }); } catch (_) {}
+    const blob = new Blob([JSON.stringify(out, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'jobright-autofill-profile-' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { try { URL.revokeObjectURL(url); a.remove(); } catch (_) {} }, 500);
+    log('exported profile', Object.keys(out).filter(k => k !== '_meta').length, 'tabs');
+  }
+
+  async function applyTabFields(modal, name, fields) {
+    const tab = findTabElement(modal, name);
+    if (!tab) return 0;
+    try { tab.click(); } catch (_) {}
+    await sleep(260);
+    let n = 0;
+    const inputs = modal.querySelectorAll('input, textarea, select');
+    for (const el of inputs) {
+      if (el.type === 'file' || el.type === 'submit' || el.type === 'button' || el.type === 'hidden') continue;
+      const key = labelFor(el);
+      if (!key || !(key in fields)) continue;
+      const v = fields[key];
+      if (el.type === 'checkbox' || el.type === 'radio') {
+        const want = !!v;
+        if (el.checked !== want) { el.click(); }
+      } else {
+        setReactValue(el, String(v));
+      }
+      n++;
+    }
+    return n;
+  }
+  async function importProfile() {
+    const modal = findModal();
+    if (!modal) { alert('Open "Your Autofill information" first.'); return; }
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'application/json,.json';
+    inp.style.display = 'none';
+    inp.addEventListener('change', async () => {
+      const file = inp.files && inp.files[0]; if (!file) return;
+      try {
+        const text = await file.text();
+        const data = JSON.parse(text);
+        let total = 0;
+        const original = getActiveTabName(modal);
+        for (const name of TAB_NAMES) {
+          if (data[name] && typeof data[name] === 'object') {
+            total += await applyTabFields(modal, name, data[name]);
+          }
+        }
+        if (original) { const t = findTabElement(modal, original); if (t) try { t.click(); } catch (_) {} }
+        try { chrome.storage.local.set({ [STORAGE_KEY]: data }); } catch (_) {}
+        log('imported profile, populated', total, 'fields');
+        alert('Imported ' + total + ' fields. Review the form and click Update.');
+      } catch (e) { alert('Import failed: ' + e.message); }
+      finally { inp.remove(); }
+    }, { once: true });
+    document.body.appendChild(inp); inp.click();
+  }
+
+  function styleBtn(b, primary) {
+    Object.assign(b.style, {
+      padding: '8px 14px', borderRadius: '10px', border: '1px solid rgba(255,255,255,0.18)',
+      background: primary ? 'linear-gradient(135deg,#6cf5b8,#2bb673)' : 'rgba(255,255,255,0.08)',
+      color: primary ? '#062b1c' : '#fff', fontWeight: '600', fontSize: '13px',
+      cursor: 'pointer', marginRight: '8px', letterSpacing: '0.01em',
+      fontFamily: "'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif"
+    });
+    b.onmouseenter = () => { b.style.transform = 'translateY(-1px)'; b.style.boxShadow = '0 6px 16px rgba(0,0,0,0.25)'; };
+    b.onmouseleave = () => { b.style.transform = 'none'; b.style.boxShadow = 'none'; };
+  }
+  function injectButtons() {
+    const modal = findModal(); if (!modal) return;
+    if (modal.querySelector('#' + BTN_ID)) return;
+    const wrap = document.createElement('div');
+    wrap.id = BTN_ID;
+    Object.assign(wrap.style, {
+      position: 'absolute', top: '14px', right: '60px', display: 'flex',
+      alignItems: 'center', zIndex: '999999'
+    });
+    const exp = document.createElement('button'); exp.type = 'button'; exp.textContent = '⬇ Export JSON';
+    const imp = document.createElement('button'); imp.type = 'button'; imp.textContent = '⬆ Import JSON';
+    styleBtn(exp, true); styleBtn(imp, false);
+    exp.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); exportProfile(); });
+    imp.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); importProfile(); });
+    wrap.appendChild(imp); wrap.appendChild(exp);
+    // Anchor the modal so absolute positioning works.
+    const cs = getComputedStyle(modal);
+    if (cs.position === 'static') modal.style.position = 'relative';
+    modal.appendChild(wrap);
+    log('buttons injected');
+  }
+
+  function tick() { try { injectButtons(); } catch (_) {} }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', tick, { once: true });
+  else tick();
+  try {
+    const mo = new MutationObserver(() => tick());
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  } catch (_) {}
 })();
