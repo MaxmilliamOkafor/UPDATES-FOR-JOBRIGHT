@@ -1,4 +1,4 @@
-// === ULTIMATE AUTOFILL ENHANCEMENT v12.4.0 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
+// === ULTIMATE AUTOFILL ENHANCEMENT v12.5.0 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
 // Built: 2026-05-07. Base: official Jobright Autofill 1.9.0 (with scroll-to-anchor patch).
 // Ultimate Edition: AI-level knockout intelligence, 500+ pre-seeded ATS responses,
 // STAR-format behavioral answers, resume keyword optimizer, smart cover-letter generator,
@@ -7244,12 +7244,15 @@ button + [role="button"],
     const exp = document.createElement('button'); exp.type = 'button'; exp.textContent = '⬇ Export JSON';
     const imp = document.createElement('button'); imp.type = 'button'; imp.textContent = '⬆ Import JSON';
     const auth = document.createElement('button'); auth.type = 'button'; auth.textContent = '🌍 Work Auth';
-    styleBtn(exp, true); styleBtn(imp, false); styleBtn(auth, false);
+    const ai = document.createElement('button'); ai.type = 'button'; ai.textContent = '🤖 AI Settings';
+    styleBtn(exp, true); styleBtn(imp, false); styleBtn(auth, false); styleBtn(ai, false);
     exp.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); exportProfile(); });
     imp.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); importProfile(); });
     auth.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation();
       try { if (window.__uaOpenWorkAuth) window.__uaOpenWorkAuth(); } catch (_) {} });
-    wrap.appendChild(auth); wrap.appendChild(imp); wrap.appendChild(exp);
+    ai.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation();
+      try { if (window.__uaOpenAiSettings) window.__uaOpenAiSettings(); } catch (_) {} });
+    wrap.appendChild(ai); wrap.appendChild(auth); wrap.appendChild(imp); wrap.appendChild(exp);
     // Anchor the modal so absolute positioning works.
     const cs = getComputedStyle(modal);
     if (cs.position === 'static') modal.style.position = 'relative';
@@ -7806,4 +7809,462 @@ button + [role="button"],
 
   log('out-of-credit popup suppressor active');
 })();
+
+// ===================== BRING-YOUR-OWN-AI ANSWER GENERATOR =====================
+// Free-text "Edit with AI" replacement that uses the user's own LLM API
+// key (OpenAI / Anthropic / Google Gemini), so AI answers work without
+// Jobright's Turbo subscription.
+//
+// - 🤖 AI Settings button in the autofill modal opens a panel where the
+//   user picks a provider, pastes their key, and optionally sets a
+//   model name.
+// - On any application page, every visible <textarea> gets a small
+//   "✨ AI" button overlay. Clicking it gathers context (the question
+//   label nearest the textarea, the user's stored profile, the visible
+//   job title / description on the page) and asks the chosen LLM to
+//   write a tailored answer, then types it into the textarea via the
+//   React-friendly native value setter so the form's onChange fires.
+// - The key never leaves the user's machine except to the chosen LLM
+//   provider's API endpoint.
+(function () {
+  'use strict';
+  const TAG = '[UA-AI]';
+  const log = (...a) => { try { console.log(TAG, ...a); } catch (_) {} };
+  const PANEL_ID = 'ua-ai-settings-panel';
+  const BTN_CLASS = 'ua-ai-gen-btn';
+
+  const STORAGE = {
+    provider: 'ua_ai_provider',
+    apiKey:   'ua_ai_api_key',
+    model:    'ua_ai_model',
+    style:    'ua_ai_style'
+  };
+
+  const PROVIDERS = {
+    openai: {
+      label: 'OpenAI (GPT-4o / GPT-4o-mini)',
+      defaultModel: 'gpt-4o-mini',
+      build: (key, model, system, user) => ({
+        url: 'https://api.openai.com/v1/chat/completions',
+        init: {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: model || 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: system },
+              { role: 'user',   content: user   }
+            ],
+            temperature: 0.7,
+            max_tokens: 1024
+          })
+        },
+        extract: (json) => json?.choices?.[0]?.message?.content?.trim() || ''
+      })
+    },
+    anthropic: {
+      label: 'Anthropic (Claude)',
+      defaultModel: 'claude-sonnet-4-6',
+      build: (key, model, system, user) => ({
+        url: 'https://api.anthropic.com/v1/messages',
+        init: {
+          method: 'POST',
+          headers: {
+            'x-api-key': key,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: model || 'claude-sonnet-4-6',
+            system: system,
+            max_tokens: 1024,
+            messages: [{ role: 'user', content: user }]
+          })
+        },
+        extract: (json) => (json?.content || []).map(p => p.text || '').join('').trim()
+      })
+    },
+    gemini: {
+      label: 'Google Gemini',
+      defaultModel: 'gemini-1.5-flash',
+      build: (key, model, system, user) => ({
+        url: 'https://generativelanguage.googleapis.com/v1beta/models/' +
+             encodeURIComponent(model || 'gemini-1.5-flash') + ':generateContent?key=' + encodeURIComponent(key),
+        init: {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: system }] },
+            contents: [{ role: 'user', parts: [{ text: user }] }],
+            generationConfig: { temperature: 0.7, maxOutputTokens: 1024 }
+          })
+        },
+        extract: (json) => (json?.candidates?.[0]?.content?.parts || []).map(p => p.text || '').join('').trim()
+      })
+    }
+  };
+
+  // ---------- Settings persistence ----------
+  let SETTINGS = { provider: 'openai', apiKey: '', model: '', style: 'concise-professional' };
+  function loadSettings() {
+    try {
+      chrome.storage.local.get(Object.values(STORAGE), (items) => {
+        SETTINGS = {
+          provider: items[STORAGE.provider] || 'openai',
+          apiKey:   items[STORAGE.apiKey]   || '',
+          model:    items[STORAGE.model]    || '',
+          style:    items[STORAGE.style]    || 'concise-professional'
+        };
+        log('loaded settings; provider=', SETTINGS.provider, 'hasKey=', !!SETTINGS.apiKey);
+      });
+    } catch (_) {}
+  }
+  function saveSettings() {
+    try { chrome.storage.local.set({
+      [STORAGE.provider]: SETTINGS.provider,
+      [STORAGE.apiKey]:   SETTINGS.apiKey,
+      [STORAGE.model]:    SETTINGS.model,
+      [STORAGE.style]:    SETTINGS.style
+    }); } catch (_) {}
+  }
+  loadSettings();
+  try {
+    if (chrome.storage && chrome.storage.onChanged) {
+      chrome.storage.onChanged.addListener((c, area) => {
+        if (area !== 'local') return;
+        if (c[STORAGE.provider]) SETTINGS.provider = c[STORAGE.provider].newValue || SETTINGS.provider;
+        if (c[STORAGE.apiKey])   SETTINGS.apiKey   = c[STORAGE.apiKey].newValue   || '';
+        if (c[STORAGE.model])    SETTINGS.model    = c[STORAGE.model].newValue    || '';
+        if (c[STORAGE.style])    SETTINGS.style    = c[STORAGE.style].newValue    || 'concise-professional';
+      });
+    }
+  } catch (_) {}
+
+  // ---------- Settings panel UI ----------
+  function styleInput(el) {
+    Object.assign(el.style, {
+      width: '100%', padding: '10px 12px', borderRadius: '10px',
+      border: '1px solid rgba(255,255,255,0.18)', background: 'rgba(255,255,255,0.06)',
+      color: '#fff', fontSize: '14px', fontFamily: 'inherit', boxSizing: 'border-box'
+    });
+  }
+  function buildSettingsPanel() {
+    const overlay = document.createElement('div');
+    overlay.id = PANEL_ID;
+    Object.assign(overlay.style, {
+      position: 'fixed', inset: '0', background: 'rgba(0,0,0,0.6)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      zIndex: '2147483647', fontFamily: "'Inter',-apple-system,sans-serif"
+    });
+    const panel = document.createElement('div');
+    Object.assign(panel.style, {
+      width: 'min(560px, 92vw)', maxHeight: '85vh', overflow: 'auto',
+      background: '#1b1f24', color: '#fff', borderRadius: '16px',
+      padding: '24px 26px', boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+      border: '1px solid rgba(255,255,255,0.08)'
+    });
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div>
+          <div style="font-size:18px;font-weight:700">🤖 AI Answer Generator</div>
+          <div style="font-size:13px;opacity:0.7;margin-top:4px;line-height:1.45">Bring your own LLM key. The extension calls your provider directly — your key is stored locally in this browser and never sent anywhere except the API endpoint you choose.</div>
+        </div>
+        <button id="ua-ai-close" style="background:transparent;border:none;color:#fff;font-size:22px;cursor:pointer;line-height:1">×</button>
+      </div>
+
+      <label style="display:block;margin:18px 0 6px;font-size:13px;font-weight:600">Provider</label>
+      <select id="ua-ai-provider"></select>
+
+      <label style="display:block;margin:14px 0 6px;font-size:13px;font-weight:600">API key</label>
+      <input id="ua-ai-key" type="password" placeholder="sk-... / claude-... / AIza..." autocomplete="off" spellcheck="false">
+
+      <label style="display:block;margin:14px 0 6px;font-size:13px;font-weight:600">Model (optional override)</label>
+      <input id="ua-ai-model" type="text" placeholder="leave blank to use the default" autocomplete="off" spellcheck="false">
+
+      <label style="display:block;margin:14px 0 6px;font-size:13px;font-weight:600">Answer style</label>
+      <select id="ua-ai-style">
+        <option value="concise-professional">Concise & professional (default)</option>
+        <option value="star-behavioral">STAR format (for behavioral questions)</option>
+        <option value="enthusiastic">Enthusiastic & specific</option>
+        <option value="brief-yes-no">Very brief (1–2 sentences)</option>
+      </select>
+
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:22px">
+        <button id="ua-ai-test"   style="padding:9px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.18);background:rgba(255,255,255,0.06);color:#fff;cursor:pointer;font-weight:600">Test key</button>
+        <button id="ua-ai-save"   style="padding:9px 18px;border-radius:10px;border:none;background:linear-gradient(135deg,#6cf5b8,#2bb673);color:#062b1c;cursor:pointer;font-weight:700">Save</button>
+      </div>
+      <div id="ua-ai-status" style="margin-top:12px;font-size:13px;min-height:18px"></div>
+    `;
+    overlay.appendChild(panel);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+
+    const provSel  = panel.querySelector('#ua-ai-provider');
+    const keyIn    = panel.querySelector('#ua-ai-key');
+    const modelIn  = panel.querySelector('#ua-ai-model');
+    const styleSel = panel.querySelector('#ua-ai-style');
+    const status   = panel.querySelector('#ua-ai-status');
+    [provSel, keyIn, modelIn, styleSel].forEach(styleInput);
+    Object.assign(provSel.style, { appearance: 'none' });
+    for (const id of Object.keys(PROVIDERS)) {
+      const o = document.createElement('option'); o.value = id; o.textContent = PROVIDERS[id].label;
+      provSel.appendChild(o);
+    }
+    provSel.value  = SETTINGS.provider;
+    keyIn.value    = SETTINGS.apiKey;
+    modelIn.value  = SETTINGS.model;
+    styleSel.value = SETTINGS.style;
+
+    panel.querySelector('#ua-ai-close').addEventListener('click', () => overlay.remove());
+    panel.querySelector('#ua-ai-save').addEventListener('click', () => {
+      SETTINGS.provider = provSel.value;
+      SETTINGS.apiKey   = keyIn.value.trim();
+      SETTINGS.model    = modelIn.value.trim();
+      SETTINGS.style    = styleSel.value;
+      saveSettings();
+      status.style.color = '#6cf5b8'; status.textContent = '✓ Saved';
+      setTimeout(() => overlay.remove(), 600);
+    });
+    panel.querySelector('#ua-ai-test').addEventListener('click', async () => {
+      status.style.color = '#aaa'; status.textContent = 'Testing…';
+      try {
+        const out = await callLLM('Reply with just the word OK.', 'Confirm the connection.', {
+          provider: provSel.value, apiKey: keyIn.value.trim(),
+          model: modelIn.value.trim(), style: styleSel.value
+        });
+        status.style.color = '#6cf5b8';
+        status.textContent = '✓ Connected. Sample reply: ' + (out.slice(0, 80) || '(empty)');
+      } catch (e) {
+        status.style.color = '#ff8a8a';
+        status.textContent = '✗ ' + (e.message || String(e));
+      }
+    });
+    return overlay;
+  }
+  function openSettings() {
+    const ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
+    document.body.appendChild(buildSettingsPanel());
+  }
+  window.__uaOpenAiSettings = openSettings;
+
+  // ---------- Context gathering ----------
+  function readProfileSnapshot(cb) {
+    try {
+      chrome.storage.local.get(['ua_profile_snapshot'], (items) => {
+        cb(items && items.ua_profile_snapshot ? items.ua_profile_snapshot : null);
+      });
+    } catch (_) { cb(null); }
+  }
+  function visibleJobContext() {
+    // Best-effort grab of job title + company + a short description chunk.
+    const out = { title: '', company: '', description: '', url: location.href };
+    try {
+      const titleEl = document.querySelector('h1, [class*="job-title" i], [data-testid*="job-title" i]');
+      if (titleEl) out.title = (titleEl.textContent || '').trim().slice(0, 200);
+      const companyEl = document.querySelector('[class*="company" i], [data-testid*="company" i]');
+      if (companyEl) out.company = (companyEl.textContent || '').trim().slice(0, 120);
+      const descEl = document.querySelector('[class*="description" i], [class*="job-detail" i], [data-testid*="description" i], main, article');
+      if (descEl) out.description = (descEl.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 2500);
+    } catch (_) {}
+    return out;
+  }
+  function questionFor(textarea) {
+    // Look for label[for], aria-label, placeholder, or the nearest
+    // preceding heading/label that's clearly a question.
+    if (textarea.id) {
+      const lab = document.querySelector('label[for="' + CSS.escape(textarea.id) + '"]');
+      if (lab && lab.textContent) return lab.textContent.trim();
+    }
+    if (textarea.getAttribute && textarea.getAttribute('aria-label')) return textarea.getAttribute('aria-label').trim();
+    if (textarea.placeholder) return textarea.placeholder.trim();
+    let cur = textarea;
+    for (let i = 0; i < 6 && cur; i++) {
+      const prev = cur.previousElementSibling;
+      if (prev) {
+        const t = (prev.textContent || '').trim();
+        if (t && t.length < 400) return t;
+      }
+      cur = cur.parentElement;
+    }
+    return '';
+  }
+  function styleHints(style) {
+    switch (style) {
+      case 'star-behavioral':
+        return 'Use the STAR format (Situation, Task, Action, Result). 4–6 sentences. First-person, specific.';
+      case 'enthusiastic':
+        return 'Show genuine interest in the role and company. Connect concrete experience to the job. 4–6 sentences.';
+      case 'brief-yes-no':
+        return 'Answer in 1–2 short sentences, plain and direct.';
+      case 'concise-professional':
+      default:
+        return 'Concise, professional, first-person. 3–5 sentences. Use the candidate\'s actual experience; do not invent facts.';
+    }
+  }
+
+  // ---------- LLM call ----------
+  async function callLLM(systemOverride, userText, opts) {
+    const provider = (opts && opts.provider) || SETTINGS.provider || 'openai';
+    const apiKey   = (opts && opts.apiKey)   || SETTINGS.apiKey;
+    const model    = (opts && opts.model)    || SETTINGS.model;
+    if (!apiKey) throw new Error('No API key configured. Click 🤖 AI Settings first.');
+    const prov = PROVIDERS[provider];
+    if (!prov) throw new Error('Unknown provider: ' + provider);
+    const { url, init, extract } = prov.build(apiKey, model, systemOverride, userText);
+    let res;
+    try { res = await fetch(url, init); }
+    catch (e) { throw new Error('Network error: ' + e.message); }
+    if (!res.ok) {
+      let body = ''; try { body = await res.text(); } catch (_) {}
+      throw new Error('HTTP ' + res.status + ' ' + res.statusText + (body ? ': ' + body.slice(0, 200) : ''));
+    }
+    let json; try { json = await res.json(); } catch (e) { throw new Error('Bad JSON from provider'); }
+    const text = extract(json);
+    if (!text) throw new Error('Empty response from provider');
+    return text;
+  }
+
+  function buildSystemPrompt(style) {
+    return [
+      'You are helping a job applicant write a strong, truthful answer to a job-application question.',
+      'Use ONLY the facts present in the candidate\'s profile and the job context provided. Do not invent employers, dates, certifications, degrees, salaries, or visa statuses.',
+      'If the candidate\'s profile does not contain enough information for a confident answer, write a short answer that is still truthful and reasonable.',
+      'Output ONLY the answer text. No preamble like "Here is the answer:". No quotes. No bullet labels.',
+      styleHints(style)
+    ].join(' ');
+  }
+  function buildUserPrompt(question, profile, jobCtx) {
+    const summary = (() => {
+      if (!profile) return '(no saved profile)';
+      try {
+        // Flatten profile snapshot to short bullet list.
+        const lines = [];
+        for (const tab of Object.keys(profile)) {
+          if (tab === '_meta') continue;
+          const fields = profile[tab];
+          if (!fields || typeof fields !== 'object') continue;
+          for (const k of Object.keys(fields)) {
+            const v = fields[k];
+            if (v === '' || v == null) continue;
+            lines.push('- ' + tab + ' / ' + k + ': ' + String(v).slice(0, 200));
+          }
+        }
+        return lines.join('\n').slice(0, 4000) || '(profile present but empty)';
+      } catch (_) { return '(profile unreadable)'; }
+    })();
+    return [
+      'Question:', '"' + question.replace(/\s+/g, ' ').trim() + '"',
+      '',
+      'Job context:',
+      jobCtx.title    ? 'Title: '       + jobCtx.title       : '',
+      jobCtx.company  ? 'Company: '     + jobCtx.company     : '',
+      jobCtx.description ? 'Description (truncated):\n' + jobCtx.description : '',
+      '',
+      'Candidate profile:',
+      summary,
+      '',
+      'Write the answer now.'
+    ].filter(Boolean).join('\n');
+  }
+
+  // ---------- Native value setter ----------
+  const taSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  const inSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  function setReactValue(el, v) {
+    try {
+      const tag = (el.tagName || '').toUpperCase();
+      const setter = tag === 'TEXTAREA' ? taSetter : inSetter;
+      if (setter) setter.call(el, v); else el.value = v;
+      el.dispatchEvent(new Event('input',  { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    } catch (_) {}
+  }
+
+  // ---------- Inject ✨ AI buttons on textareas ----------
+  function isEligible(ta) {
+    if (!ta || ta.disabled || ta.readOnly) return false;
+    if (ta.dataset.uaAi) return false;
+    const r = ta.getBoundingClientRect();
+    if (r.width < 60 || r.height < 24) return false;
+    if (r.width === 0 && r.height === 0) return false;
+    return true;
+  }
+  function attachButton(ta) {
+    ta.dataset.uaAi = '1';
+    const wrap = ta.parentElement;
+    if (!wrap) return;
+    const cs = getComputedStyle(wrap);
+    if (cs.position === 'static') wrap.style.position = 'relative';
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.className = BTN_CLASS;
+    btn.textContent = '✨ AI';
+    Object.assign(btn.style, {
+      position: 'absolute', bottom: '6px', right: '8px', zIndex: '2147483646',
+      padding: '4px 9px', fontSize: '11px', fontWeight: '700', borderRadius: '8px',
+      border: 'none', cursor: 'pointer', letterSpacing: '0.02em',
+      background: 'linear-gradient(135deg,#6cf5b8,#2bb673)', color: '#062b1c',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.25)',
+      fontFamily: "'Inter',-apple-system,sans-serif"
+    });
+    btn.addEventListener('mouseenter', () => { btn.style.transform = 'translateY(-1px)'; });
+    btn.addEventListener('mouseleave', () => { btn.style.transform = 'none'; });
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (!SETTINGS.apiKey) { openSettings(); return; }
+      const orig = btn.textContent; btn.textContent = '⏳ Thinking…'; btn.disabled = true;
+      try {
+        const question = questionFor(ta);
+        if (!question) throw new Error('Could not detect question text near this textarea');
+        const jobCtx = visibleJobContext();
+        const profile = await new Promise(r => readProfileSnapshot(r));
+        const sys = buildSystemPrompt(SETTINGS.style);
+        const usr = buildUserPrompt(question, profile, jobCtx);
+        const out = await callLLM(sys, usr);
+        setReactValue(ta, out);
+        ta.focus();
+        btn.textContent = '✓ Filled';
+        setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1400);
+      } catch (err) {
+        log('generate failed', err);
+        btn.textContent = '✗ Error';
+        btn.title = err.message || String(err);
+        setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 2400);
+      }
+    });
+    wrap.appendChild(btn);
+  }
+  function injectAll(scope) {
+    if (!scope || !scope.querySelectorAll) return;
+    for (const ta of scope.querySelectorAll('textarea')) {
+      if (isEligible(ta)) attachButton(ta);
+    }
+  }
+  function tick() {
+    try { injectAll(document); } catch (_) {}
+    try {
+      for (const f of document.querySelectorAll('iframe')) {
+        try { injectAll(f.contentDocument); } catch (_) {}
+      }
+    } catch (_) {}
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', tick, { once: true });
+  else tick();
+  try {
+    const mo = new MutationObserver(() => tick());
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  } catch (_) {}
+  setInterval(tick, 1500);
+
+  // Keyboard shortcut: Ctrl+Shift+A opens the AI settings panel.
+  try {
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'A' || e.key === 'a')) {
+        e.preventDefault(); openSettings();
+      }
+    }, true);
+  } catch (_) {}
+
+  log('AI generator loaded; provider=', SETTINGS.provider);
+})();
+
 
