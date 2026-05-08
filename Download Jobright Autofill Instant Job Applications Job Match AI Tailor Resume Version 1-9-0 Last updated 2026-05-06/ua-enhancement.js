@@ -1,4 +1,4 @@
-// === ULTIMATE AUTOFILL ENHANCEMENT v12.3.0 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
+// === ULTIMATE AUTOFILL ENHANCEMENT v12.3.1 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
 // Built: 2026-05-07. Base: official Jobright Autofill 1.9.0 (with scroll-to-anchor patch).
 // Ultimate Edition: AI-level knockout intelligence, 500+ pre-seeded ATS responses,
 // STAR-format behavioral answers, resume keyword optimizer, smart cover-letter generator,
@@ -7257,9 +7257,40 @@ button + [role="button"],
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', tick, { once: true });
   else tick();
   try {
+    // Document-level observer (catches modals rendered into the page DOM)
     const mo = new MutationObserver(() => tick());
     mo.observe(document.documentElement, { childList: true, subtree: true });
   } catch (_) {}
+  // Polling fallback — the modal often lives inside the Plasmo sidebar
+  // shadow root, where document-level MutationObservers don't fire. Poll
+  // every 600ms; injectButtons is a no-op once the buttons exist.
+  setInterval(tick, 600);
+  // Also observe any shadow roots we discover so we react quickly when
+  // their internals change (modal opens/closes).
+  const OBSERVED = new WeakSet();
+  function attachShadowObservers() {
+    try {
+      const stack = [document];
+      while (stack.length) {
+        const cur = stack.pop(); if (!cur) continue;
+        const kids = cur.children || [];
+        for (let i = 0; i < kids.length; i++) {
+          const c = kids[i];
+          if (c.shadowRoot && !OBSERVED.has(c.shadowRoot)) {
+            OBSERVED.add(c.shadowRoot);
+            try {
+              const m = new MutationObserver(() => tick());
+              m.observe(c.shadowRoot, { childList: true, subtree: true });
+            } catch (_) {}
+            stack.push(c.shadowRoot);
+          }
+          stack.push(c);
+        }
+      }
+    } catch (_) {}
+  }
+  attachShadowObservers();
+  setInterval(attachShadowObservers, 1500);
 })();
 
 // ===================== WORK AUTHORIZATION PICKER + AUTO-ANSWER =====================
@@ -7592,6 +7623,18 @@ button + [role="button"],
   try {
     const mo = new MutationObserver(() => { processAll(); });
     mo.observe(document.documentElement, { childList: true, subtree: true });
+  } catch (_) {}
+  // Polling fallback for SPAs and shadow-root forms.
+  setInterval(processAll, 1200);
+  // Expose openPanel via a keyboard shortcut (Ctrl+Shift+W) and via the
+  // window object so it can also be triggered from devtools while we
+  // verify the sidebar button injection on each release.
+  try {
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'W' || e.key === 'w')) {
+        e.preventDefault(); openPanel();
+      }
+    }, true);
   } catch (_) {}
   // Refresh resolved set whenever storage changes (cross-tab support)
   try {
