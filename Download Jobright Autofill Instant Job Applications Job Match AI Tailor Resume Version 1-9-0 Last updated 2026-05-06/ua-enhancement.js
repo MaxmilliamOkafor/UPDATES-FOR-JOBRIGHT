@@ -1,4 +1,4 @@
-// === ULTIMATE AUTOFILL ENHANCEMENT v12.0.4 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
+// === ULTIMATE AUTOFILL ENHANCEMENT v12.0.5 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
 // Built: 2026-05-07. Base: official Jobright Autofill 1.9.0 (with scroll-to-anchor patch).
 // Ultimate Edition: AI-level knockout intelligence, 500+ pre-seeded ATS responses,
 // STAR-format behavioral answers, resume keyword optimizer, smart cover-letter generator,
@@ -6727,22 +6727,48 @@ plasmo-csui .ua-ultimate-badge {
     /\bget\s+hired\s+faster\b/i,
     /\bunlock\s+(unlimited|premium|pro|ultimate)\b/i,
     /\bgo\s+(pro|premium|unlimited|ultimate)\b/i,
+    /\b\d{1,3}\s*%\s*off\b/i,
+    /\bupgrade\s+to\s+turbo\s+to\b/i,
+    /\bautofill\s+answers\s+with\s+ai\b/i,
+    /\b\d+\s+credits?\s+left\b/i
+  ];
+  // High-confidence phrases that ALWAYS warrant removing the closest
+  // banner/card wrapper, bypassing the "keep core controls" guard. These
+  // strings are only ever paywall language regardless of surrounding words
+  // (e.g. "Upgrade to Turbo to autofill answers with AI" contains the word
+  // "autofill" but is still 100% paywall).
+  const HARD_KILL_PHRASES = [
+    /\bupgrade\s+to\s+turbo\b/i,
+    /\bget\s+unlimited\b/i,
+    /\bget\s+hired\s+faster\b/i,
+    /\bautofill\s+answers\s+with\s+ai\b/i,
+    /\b\d+\s+credits?\s+left\b/i,
+    /\bunlock\s+(unlimited|premium|pro|ultimate)\b/i,
+    /\bgo\s+(pro|premium|unlimited|ultimate)\b/i,
     /\b\d{1,3}\s*%\s*off\b/i
   ];
   // Walk up to N ancestors looking for a reasonable wrapper to remove —
   // we don't want to delete the entire sidebar, so cap depth and skip
   // elements that contain primary buttons we want to keep.
-  function findKillTarget(el) {
-    const KEEP_RE = /(autofill|tailor|resume|match|score|completion|upload)/i;
+  function findKillTarget(el, hard) {
+    const KEEP_RE = /(your\s+autofill\s+information|upload\s+resume|tailor\s+resume|match\s+score|completion|add\s+this\s+job)/i;
     let cur = el; let best = el;
-    for (let i = 0; i < 6 && cur; i++) {
+    const limit = hard ? 8 : 6;
+    for (let i = 0; i < limit && cur; i++) {
       const txt = (cur.textContent || '').trim();
       if (!txt) break;
-      // If the wrapper still ONLY contains paywall language, keep climbing.
-      const onlyPaywall = KILL_PHRASES.some(re => re.test(txt)) &&
-                          !KEEP_RE.test(txt.replace(/upgrade|unlimited|credits?|turbo|hired|premium|ultimate/gi, ''));
-      if (onlyPaywall) best = cur;
-      else break;
+      if (hard) {
+        // Hard mode: only stop climbing when the wrapper would also engulf
+        // a clearly-different control (not just any element containing the
+        // word "autofill" — that word is in the paywall itself).
+        if (KEEP_RE.test(txt)) break;
+        best = cur;
+      } else {
+        const onlyPaywall = KILL_PHRASES.some(re => re.test(txt)) &&
+                            !KEEP_RE.test(txt);
+        if (onlyPaywall) best = cur;
+        else break;
+      }
       cur = cur.parentElement;
     }
     return best;
@@ -6755,12 +6781,36 @@ plasmo-csui .ua-ultimate-badge {
         if (el.children && el.children.length > 0) continue;
         const txt = (el.textContent || '').trim();
         if (!txt) continue;
-        if (KILL_PHRASES.some(re => re.test(txt))) {
-          const target = findKillTarget(el);
+        const hard = HARD_KILL_PHRASES.some(re => re.test(txt));
+        const soft = !hard && KILL_PHRASES.some(re => re.test(txt));
+        if (hard || soft) {
+          const target = findKillTarget(el, hard);
           if (target && target.style) {
             target.style.setProperty('display', 'none', 'important');
+            target.style.setProperty('visibility', 'hidden', 'important');
+            target.style.setProperty('height', '0', 'important');
+            target.style.setProperty('width', '0', 'important');
+            target.style.setProperty('margin', '0', 'important');
+            target.style.setProperty('padding', '0', 'important');
+            target.style.setProperty('overflow', 'hidden', 'important');
             target.setAttribute('data-ua-killed', '1');
           }
+        }
+      }
+      // Whole-element scan for HARD phrases on parents whose textContent
+      // matches even if their own children don't have a leaf-only text
+      // node (covers the "Upgrade to Turbo … autofill answers with AI"
+      // tooltip that nests label + button together).
+      for (const el of all) {
+        if (el.hasAttribute && el.hasAttribute('data-ua-killed')) continue;
+        const txt = (el.textContent || '').trim();
+        if (!txt || txt.length > 200) continue;
+        if (HARD_KILL_PHRASES.some(re => re.test(txt))) {
+          // Don't kill if this element ALSO wraps a clearly-different
+          // control (the whole sidebar contains "Upgrade to Turbo" too).
+          if (/(your\s+autofill\s+information|upload\s+resume|tailor\s+resume|match\s+score|completion|add\s+this\s+job|submit\s+application)/i.test(txt)) continue;
+          el.style.setProperty('display', 'none', 'important');
+          el.setAttribute('data-ua-killed', '1');
         }
       }
       // Also nuke common upgrade/close-banner anchors and buttons by href/text.
@@ -6769,9 +6819,12 @@ plasmo-csui .ua-ultimate-badge {
         const href = (a.getAttribute && (a.getAttribute('href') || '')) || '';
         const txt = (a.textContent || '').trim();
         if (/\/(pricing|upgrade|billing|plans?|subscribe|checkout|turbo)/i.test(href) ||
-            /\bget\s+unlimited\b|\bupgrade\b|\bgo\s+pro\b|\bget\s+hired\s+faster\b/i.test(txt)) {
-          const target = findKillTarget(a);
-          if (target && target.style) target.style.setProperty('display', 'none', 'important');
+            /\bget\s+unlimited\b|^\s*upgrade(\s+now)?\s*$|\bgo\s+pro\b|\bget\s+hired\s+faster\b|\bupgrade\s+to\s+turbo\b/i.test(txt)) {
+          const target = findKillTarget(a, true);
+          if (target && target.style) {
+            target.style.setProperty('display', 'none', 'important');
+            target.setAttribute('data-ua-killed', '1');
+          }
         }
       }
     } catch (_) {}
