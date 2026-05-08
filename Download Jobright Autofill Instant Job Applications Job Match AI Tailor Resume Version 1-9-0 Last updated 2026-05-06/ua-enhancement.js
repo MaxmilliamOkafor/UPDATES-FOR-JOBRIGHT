@@ -1,4 +1,4 @@
-// === ULTIMATE AUTOFILL ENHANCEMENT v12.3.1 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
+// === ULTIMATE AUTOFILL ENHANCEMENT v12.4.0 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
 // Built: 2026-05-07. Base: official Jobright Autofill 1.9.0 (with scroll-to-anchor patch).
 // Ultimate Edition: AI-level knockout intelligence, 500+ pre-seeded ATS responses,
 // STAR-format behavioral answers, resume keyword optimizer, smart cover-letter generator,
@@ -6808,6 +6808,10 @@ button + [role="button"],
     /\bget\s+hired\s+faster\b/i,
     /\bautofill\s+answers\s+with\s+ai\b/i,
     /\b\d+\s+credits?\s+left\b/i,
+    /\bremaining\s+autofill\s+credits?\b/i,
+    /\bcredits?\s+will\s+be\s+refilled\b/i,
+    /\bcredits?\s+refill\s+to\b/i,
+    /\bupgrade\s+to\s+turbo\s+for\s+unlimited\s+use\b/i,
     /\bunlock\s+(unlimited|premium|pro|ultimate)\b/i,
     /\bgo\s+(pro|premium|unlimited|ultimate)\b/i,
     /\b\d{1,3}\s*%\s*off\b/i
@@ -7650,3 +7654,156 @@ button + [role="button"],
     }
   } catch (_) {}
 })();
+
+// ===================== OUT-OF-CREDIT POPUP SUPPRESSOR =====================
+// The Jobright autofill flow runs inside an iframe that hits a server
+// endpoint; on a free account the server returns HTTP 402 PAYMENT_REQUIRED
+// and the iframe sends window.postMessage({httpStatus: 402, ...}) to the
+// parent, which calls setShowOutofCredit(true) and renders the
+// "You have 0 remaining Autofill credits" Antd modal.
+//
+// Client-side spoofing of subscribed:true / Turbo through fetch / XHR /
+// runtime.sendMessage / chrome.storage already takes care of every UI
+// gate that runs locally, but this popup is driven by an iframe message
+// so we have to intercept that specifically. We rewrite or drop the
+// 402-bearing postMessage in the capture phase before the bundle's
+// listener sees it, and as a safety net we also tear down the modal if
+// it has already mounted.
+(function () {
+  'use strict';
+  const TAG = '[UA-NOPOPUP]';
+  const log = (...a) => { try { console.log(TAG, ...a); } catch (_) {} };
+
+  // ---- 1. Intercept iframe → parent message that triggers the popup ----
+  // Capture-phase listeners run before normal-phase ones. Because this
+  // file is a content_script with run_at: document_start, it registers
+  // before the bundle attaches its own message handler in the same
+  // isolated world.
+  function isPaywallMessage(d) {
+    if (!d || typeof d !== 'object') return false;
+    if (d.httpStatus === 402) return true;
+    if (d.status === 402) return true;
+    if (typeof d.code === 'number' && d.code === 402) return true;
+    return false;
+  }
+  try {
+    window.addEventListener('message', function (e) {
+      try {
+        if (isPaywallMessage(e.data)) {
+          log('intercepted 402 postMessage', e.data);
+          // Stop the bundle's listener from running.
+          e.stopImmediatePropagation();
+        }
+      } catch (_) {}
+    }, true); // capture
+  } catch (_) {}
+
+  // ---- 2. Tear down the popup if it already opened ----
+  const POPUP_TEXT = [
+    /remaining\s+autofill\s+credits/i,
+    /credits?\s+will\s+be\s+refilled/i,
+    /credits?\s+refill\s+to/i,
+    /upgrade\s+to\s+turbo\s+for\s+unlimited\s+use/i
+  ];
+  function killPopup(scope) {
+    try {
+      // Antd modals have class popup-modal-wrap / popup-modal / ant-modal-wrap.
+      const candidates = scope.querySelectorAll
+        ? scope.querySelectorAll('.popup-modal-wrap, .popup-modal, .ant-modal-wrap, .ant-modal-root, [class*="popup-modal" i]')
+        : [];
+      for (const el of candidates) {
+        const txt = (el.textContent || '');
+        if (POPUP_TEXT.some(re => re.test(txt))) {
+          // Click Cancel if present so the bundle's state resets cleanly.
+          const cancelBtn = [...el.querySelectorAll('button')].find(b =>
+            /^\s*cancel\s*$/i.test((b.textContent || '').trim()));
+          try { if (cancelBtn) cancelBtn.click(); } catch (_) {}
+          el.style.setProperty('display', 'none', 'important');
+          el.setAttribute('data-ua-killed', '1');
+          log('killed out-of-credit popup');
+        }
+      }
+      // Also kill any element whose own innermost text matches the popup
+      // copy, in case Jobright moves the modal under a new wrapper class.
+      const all = scope.querySelectorAll ? scope.querySelectorAll('div,span,p') : [];
+      for (const el of all) {
+        if (el.children && el.children.length > 0) continue;
+        const t = (el.textContent || '').trim();
+        if (!t || t.length > 200) continue;
+        if (POPUP_TEXT.some(re => re.test(t))) {
+          let cur = el;
+          for (let i = 0; i < 8 && cur; i++) {
+            // Climb to the modal wrapper and hide it.
+            const cls = (cur.className || '') + '';
+            if (/(popup-modal|ant-modal|modal-wrap|Overlay|overlay)/i.test(cls) ||
+                /(popup-modal|ant-modal|modal-wrap)/i.test(cur.id || '')) {
+              cur.style.setProperty('display', 'none', 'important');
+              cur.setAttribute('data-ua-killed', '1');
+              break;
+            }
+            cur = cur.parentElement;
+          }
+        }
+      }
+    } catch (_) {}
+  }
+  function killAll() {
+    try { killPopup(document); } catch (_) {}
+    // Iframes (the autofill flow runs in iframes for some ATS sites)
+    try {
+      for (const f of document.querySelectorAll('iframe')) {
+        try { killPopup(f.contentDocument); } catch (_) {}
+      }
+    } catch (_) {}
+    // Shadow roots (sidebar)
+    try {
+      const stack = [document];
+      while (stack.length) {
+        const cur = stack.pop(); if (!cur) continue;
+        const kids = cur.children || [];
+        for (let i = 0; i < kids.length; i++) {
+          const c = kids[i];
+          if (c.shadowRoot) { killPopup(c.shadowRoot); stack.push(c.shadowRoot); }
+          stack.push(c);
+        }
+      }
+    } catch (_) {}
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', killAll, { once: true });
+  } else {
+    killAll();
+  }
+  try {
+    const mo = new MutationObserver(() => killAll());
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  } catch (_) {}
+  setInterval(killAll, 600);
+
+  // ---- 3. Soften Jobright autofill API 402 responses to 200 (best-effort) ----
+  // The actual AI generation is server-gated, so this won't make the AI
+  // produce answers without Turbo, but it does prevent the 402 from
+  // reaching the iframe → postMessage path on requests that the content
+  // script itself initiates.
+  try {
+    const origFetch = window.fetch;
+    if (origFetch && !window.__uaUnlock402Patched) {
+      window.__uaUnlock402Patched = true;
+      window.fetch = async function (input, init) {
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        const res = await origFetch.apply(this, arguments);
+        try {
+          if (res.status === 402 && /jobright(-internal)?\.(ai|com)/i.test(url)) {
+            log('rewrote 402 fetch →', url);
+            return new Response('{}', { status: 200, statusText: 'OK',
+              headers: { 'content-type': 'application/json' } });
+          }
+        } catch (_) {}
+        return res;
+      };
+    }
+  } catch (_) {}
+
+  log('out-of-credit popup suppressor active');
+})();
+
