@@ -1,4 +1,4 @@
-// === ULTIMATE AUTOFILL ENHANCEMENT v12.2.1 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
+// === ULTIMATE AUTOFILL ENHANCEMENT v12.3.0 (Jobright v1.9.0 — WORK'N-30.0 / VERSION 5) ===
 // Built: 2026-05-07. Base: official Jobright Autofill 1.9.0 (with scroll-to-anchor patch).
 // Ultimate Edition: AI-level knockout intelligence, 500+ pre-seeded ATS responses,
 // STAR-format behavioral answers, resume keyword optimizer, smart cover-letter generator,
@@ -7239,10 +7239,13 @@ button + [role="button"],
     });
     const exp = document.createElement('button'); exp.type = 'button'; exp.textContent = '⬇ Export JSON';
     const imp = document.createElement('button'); imp.type = 'button'; imp.textContent = '⬆ Import JSON';
-    styleBtn(exp, true); styleBtn(imp, false);
+    const auth = document.createElement('button'); auth.type = 'button'; auth.textContent = '🌍 Work Auth';
+    styleBtn(exp, true); styleBtn(imp, false); styleBtn(auth, false);
     exp.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); exportProfile(); });
     imp.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); importProfile(); });
-    wrap.appendChild(imp); wrap.appendChild(exp);
+    auth.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation();
+      try { if (window.__uaOpenWorkAuth) window.__uaOpenWorkAuth(); } catch (_) {} });
+    wrap.appendChild(auth); wrap.appendChild(imp); wrap.appendChild(exp);
     // Anchor the modal so absolute positioning works.
     const cs = getComputedStyle(modal);
     if (cs.position === 'static') modal.style.position = 'relative';
@@ -7256,5 +7259,351 @@ button + [role="button"],
   try {
     const mo = new MutationObserver(() => tick());
     mo.observe(document.documentElement, { childList: true, subtree: true });
+  } catch (_) {}
+})();
+
+// ===================== WORK AUTHORIZATION PICKER + AUTO-ANSWER =====================
+// User picks regions/countries where they have legal work authorization.
+// On any application page, when a question matches "Are you legally
+// authorized to work in <country>?" / "Do you have right to work in <X>?",
+// we auto-select Yes if the country falls inside one of their regions,
+// otherwise No.
+(function () {
+  'use strict';
+  const TAG = '[UA-AUTH]';
+  const log = (...a) => { try { console.log(TAG, ...a); } catch (_) {} };
+  const STORAGE_KEY = 'ua_work_auth_regions';
+  const PANEL_ID = 'ua-work-auth-panel';
+
+  // Region presets. Each region resolves to a set of country aliases that
+  // we use for matching question text. Selecting a parent region (e.g.
+  // "European Union") implicitly authorizes every member.
+  const REGIONS = [
+    { id: 'US', label: 'United States 🇺🇸',  aliases: ['us','usa','u.s.','u.s.a.','united states','america','american'] },
+    { id: 'CA', label: 'Canada 🇨🇦',          aliases: ['canada','canadian'] },
+    { id: 'MX', label: 'Mexico 🇲🇽',          aliases: ['mexico','mexican'] },
+    { id: 'UK', label: 'United Kingdom 🇬🇧', aliases: ['uk','u.k.','united kingdom','britain','great britain','england','scotland','wales','northern ireland','british'] },
+    { id: 'IE', label: 'Ireland 🇮🇪',         aliases: ['ireland','irish','republic of ireland'] },
+    { id: 'EU', label: 'European Union 🇪🇺', aliases: ['eu','e.u.','european union'], includes: ['DE','FR','ES','IT','NL','BE','AT','BG','HR','CY','CZ','DK','EE','FI','GR','HU','IE','LV','LT','LU','MT','PL','PT','RO','SK','SI','SE'] },
+    { id: 'EUROPE', label: 'Europe (broad) 🌍', aliases: ['europe','european'], includes: ['EU','UK','CH','NO','IS'] },
+    { id: 'SCHENGEN', label: 'Schengen Area', aliases: ['schengen'], includes: ['EU','CH','NO','IS'] },
+    { id: 'DE', label: 'Germany 🇩🇪',         aliases: ['germany','german','deutschland'] },
+    { id: 'FR', label: 'France 🇫🇷',          aliases: ['france','french'] },
+    { id: 'ES', label: 'Spain 🇪🇸',           aliases: ['spain','spanish','espana','españa'] },
+    { id: 'IT', label: 'Italy 🇮🇹',           aliases: ['italy','italian','italia'] },
+    { id: 'NL', label: 'Netherlands 🇳🇱',     aliases: ['netherlands','dutch','holland'] },
+    { id: 'BE', label: 'Belgium 🇧🇪',         aliases: ['belgium','belgian'] },
+    { id: 'CH', label: 'Switzerland 🇨🇭',     aliases: ['switzerland','swiss'] },
+    { id: 'NO', label: 'Norway 🇳🇴',          aliases: ['norway','norwegian'] },
+    { id: 'IS', label: 'Iceland 🇮🇸',         aliases: ['iceland','icelandic'] },
+    { id: 'AT', label: 'Austria 🇦🇹',         aliases: ['austria','austrian'] },
+    { id: 'BG', label: 'Bulgaria 🇧🇬',        aliases: ['bulgaria','bulgarian'] },
+    { id: 'HR', label: 'Croatia 🇭🇷',         aliases: ['croatia','croatian'] },
+    { id: 'CY', label: 'Cyprus 🇨🇾',          aliases: ['cyprus','cypriot'] },
+    { id: 'CZ', label: 'Czechia 🇨🇿',         aliases: ['czechia','czech','czech republic'] },
+    { id: 'DK', label: 'Denmark 🇩🇰',         aliases: ['denmark','danish'] },
+    { id: 'EE', label: 'Estonia 🇪🇪',         aliases: ['estonia','estonian'] },
+    { id: 'FI', label: 'Finland 🇫🇮',         aliases: ['finland','finnish'] },
+    { id: 'GR', label: 'Greece 🇬🇷',          aliases: ['greece','greek'] },
+    { id: 'HU', label: 'Hungary 🇭🇺',         aliases: ['hungary','hungarian'] },
+    { id: 'LV', label: 'Latvia 🇱🇻',          aliases: ['latvia','latvian'] },
+    { id: 'LT', label: 'Lithuania 🇱🇹',       aliases: ['lithuania','lithuanian'] },
+    { id: 'LU', label: 'Luxembourg 🇱🇺',      aliases: ['luxembourg'] },
+    { id: 'MT', label: 'Malta 🇲🇹',           aliases: ['malta','maltese'] },
+    { id: 'PL', label: 'Poland 🇵🇱',          aliases: ['poland','polish'] },
+    { id: 'PT', label: 'Portugal 🇵🇹',        aliases: ['portugal','portuguese'] },
+    { id: 'RO', label: 'Romania 🇷🇴',         aliases: ['romania','romanian'] },
+    { id: 'SK', label: 'Slovakia 🇸🇰',        aliases: ['slovakia','slovak'] },
+    { id: 'SI', label: 'Slovenia 🇸🇮',        aliases: ['slovenia','slovenian'] },
+    { id: 'SE', label: 'Sweden 🇸🇪',          aliases: ['sweden','swedish'] },
+    { id: 'AU', label: 'Australia 🇦🇺',       aliases: ['australia','australian'] },
+    { id: 'NZ', label: 'New Zealand 🇳🇿',     aliases: ['new zealand','nz','kiwi'] },
+    { id: 'SG', label: 'Singapore 🇸🇬',       aliases: ['singapore','singaporean'] },
+    { id: 'HK', label: 'Hong Kong 🇭🇰',       aliases: ['hong kong','hk'] },
+    { id: 'JP', label: 'Japan 🇯🇵',           aliases: ['japan','japanese'] },
+    { id: 'KR', label: 'South Korea 🇰🇷',     aliases: ['south korea','korea','korean'] },
+    { id: 'IN', label: 'India 🇮🇳',           aliases: ['india','indian'] },
+    { id: 'AE', label: 'UAE 🇦🇪',             aliases: ['uae','united arab emirates','emirates','dubai','abu dhabi'] },
+    { id: 'IL', label: 'Israel 🇮🇱',          aliases: ['israel','israeli'] },
+    { id: 'BR', label: 'Brazil 🇧🇷',          aliases: ['brazil','brazilian'] },
+    { id: 'AR', label: 'Argentina 🇦🇷',       aliases: ['argentina','argentinian','argentinean'] },
+    { id: 'ZA', label: 'South Africa 🇿🇦',    aliases: ['south africa','south african'] },
+    { id: 'NG', label: 'Nigeria 🇳🇬',         aliases: ['nigeria','nigerian'] }
+  ];
+  const REGION_BY_ID = Object.fromEntries(REGIONS.map(r => [r.id, r]));
+
+  // Resolve a set of selected ids into the full set of country ids
+  // (expanding "European Union" into each member, etc.).
+  function resolveSelected(selected) {
+    const out = new Set();
+    function walk(id) {
+      if (out.has(id)) return; out.add(id);
+      const r = REGION_BY_ID[id]; if (!r || !r.includes) return;
+      for (const child of r.includes) walk(child);
+    }
+    for (const id of selected) walk(id);
+    return out;
+  }
+  function aliasesFor(ids) {
+    const aliases = [];
+    for (const id of ids) {
+      const r = REGION_BY_ID[id]; if (r) aliases.push(...r.aliases);
+    }
+    return aliases;
+  }
+
+  let SELECTED = new Set();
+  let RESOLVED = new Set();
+  let RESOLVED_ALIASES = [];
+  function refreshResolved() {
+    RESOLVED = resolveSelected(SELECTED);
+    RESOLVED_ALIASES = aliasesFor(RESOLVED).map(a => a.toLowerCase());
+  }
+  function loadSelected() {
+    try {
+      chrome.storage.local.get([STORAGE_KEY], (items) => {
+        const v = items && items[STORAGE_KEY];
+        if (Array.isArray(v)) SELECTED = new Set(v);
+        refreshResolved();
+        log('loaded', [...SELECTED]);
+      });
+    } catch (_) {}
+  }
+  function saveSelected() {
+    try { chrome.storage.local.set({ [STORAGE_KEY]: [...SELECTED] }); } catch (_) {}
+    refreshResolved();
+  }
+
+  // ---------- Picker UI ----------
+  function buildPanel() {
+    const overlay = document.createElement('div');
+    overlay.id = PANEL_ID;
+    Object.assign(overlay.style, {
+      position: 'fixed', inset: '0', background: 'rgba(0,0,0,0.6)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      zIndex: '2147483647', fontFamily: "'Inter',-apple-system,sans-serif"
+    });
+    const panel = document.createElement('div');
+    Object.assign(panel.style, {
+      width: 'min(680px, 92vw)', maxHeight: '82vh', overflow: 'auto',
+      background: '#1b1f24', color: '#fff', borderRadius: '16px',
+      padding: '22px 24px', boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
+      border: '1px solid rgba(255,255,255,0.08)'
+    });
+    panel.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div>
+          <div style="font-size:18px;font-weight:700">🌍 Work Authorization</div>
+          <div style="font-size:13px;opacity:0.7;margin-top:4px">Select every country/region where you have legal work authorization. The extension will auto-answer "Yes" to questions like “Are you legally authorized to work in &lt;country&gt;?” when the country matches.</div>
+        </div>
+        <button id="ua-auth-close" style="background:transparent;border:none;color:#fff;font-size:22px;cursor:pointer;line-height:1">×</button>
+      </div>
+      <div id="ua-auth-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin:14px 0 18px"></div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button id="ua-auth-clear" style="padding:9px 16px;border-radius:10px;border:1px solid rgba(255,255,255,0.18);background:rgba(255,255,255,0.06);color:#fff;cursor:pointer;font-weight:600">Clear all</button>
+        <button id="ua-auth-save"  style="padding:9px 18px;border-radius:10px;border:none;background:linear-gradient(135deg,#6cf5b8,#2bb673);color:#062b1c;cursor:pointer;font-weight:700">Save</button>
+      </div>
+    `;
+    const grid = panel.querySelector('#ua-auth-grid');
+    for (const r of REGIONS) {
+      const lbl = document.createElement('label');
+      Object.assign(lbl.style, { display: 'flex', alignItems: 'center', gap: '8px',
+        padding: '8px 10px', borderRadius: '10px', cursor: 'pointer',
+        background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' });
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.value = r.id;
+      cb.checked = SELECTED.has(r.id);
+      cb.addEventListener('change', () => {
+        if (cb.checked) SELECTED.add(r.id); else SELECTED.delete(r.id);
+      });
+      const sp = document.createElement('span'); sp.textContent = r.label;
+      sp.style.fontSize = '13px';
+      lbl.appendChild(cb); lbl.appendChild(sp);
+      grid.appendChild(lbl);
+    }
+    overlay.appendChild(panel);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+    panel.querySelector('#ua-auth-close').addEventListener('click', () => overlay.remove());
+    panel.querySelector('#ua-auth-clear').addEventListener('click', () => {
+      SELECTED.clear();
+      grid.querySelectorAll('input[type="checkbox"]').forEach(cb => cb.checked = false);
+    });
+    panel.querySelector('#ua-auth-save').addEventListener('click', () => {
+      saveSelected();
+      overlay.remove();
+      log('saved', [...SELECTED]);
+    });
+    return overlay;
+  }
+  function openPanel() {
+    const ex = document.getElementById(PANEL_ID); if (ex) { ex.remove(); return; }
+    document.body.appendChild(buildPanel());
+  }
+  window.__uaOpenWorkAuth = openPanel;
+
+  // ---------- Auto-answer ----------
+  // Question text patterns that indicate work authorization. We extract
+  // the country mentioned in the question and decide Yes/No.
+  const AUTH_QUESTION_RE = /\b(legally\s+authorized\s+to\s+work|authorized\s+to\s+work|right\s+to\s+work|eligible\s+to\s+work|permitted\s+to\s+work|authori[sz]ation\s+to\s+work|work\s+authori[sz]ation|are\s+you\s+a\s+citizen|permanent\s+resident|require\s+(?:a\s+)?work\s+(?:visa|permit|sponsorship)|need\s+sponsorship)\b/i;
+  // Sponsorship questions (negative — the answer logic flips when matched)
+  const SPONSORSHIP_RE = /\b(require|need|requires|needs|will\s+you\s+(?:now|in\s+the\s+future|require|need)|sponsorship\s+(?:now|in\s+the\s+future))\b.*\b(sponsorship|visa\s+sponsorship|h-?1b|work\s+visa|work\s+permit)\b/i;
+
+  function extractCountryFromText(text) {
+    const t = (text || '').toLowerCase();
+    for (const r of REGIONS) {
+      for (const a of r.aliases) {
+        // Word-boundary match. For short codes (us, uk, eu) require dots
+        // or word boundaries to avoid matching inside other words.
+        const re = a.length <= 3
+          ? new RegExp('(?:^|[^a-z])' + a.replace(/\./g, '\\.') + '(?:[^a-z]|$)', 'i')
+          : new RegExp('\\b' + a.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i');
+        if (re.test(t)) return r.id;
+      }
+    }
+    return null;
+  }
+  function isAuthorizedFor(countryId) {
+    if (!countryId) return null;
+    if (RESOLVED.has(countryId)) return true;
+    // Also accept if any of the user's selections aliases match
+    return false;
+  }
+
+  // Find the question label associated with a control (radio group, select, input)
+  function questionTextFor(el) {
+    // Climb until we find a wrapper containing recognizable question text
+    let cur = el;
+    for (let i = 0; i < 8 && cur; i++) {
+      const txt = (cur.textContent || '').trim();
+      if (txt && txt.length < 500 && AUTH_QUESTION_RE.test(txt)) return txt;
+      cur = cur.parentElement;
+    }
+    // Fallback: aria-labelledby / aria-label / preceding label
+    if (el.getAttribute) {
+      const al = el.getAttribute('aria-label'); if (al && AUTH_QUESTION_RE.test(al)) return al;
+      const ld = el.getAttribute('aria-labelledby');
+      if (ld) {
+        const lab = document.getElementById(ld);
+        if (lab && AUTH_QUESTION_RE.test(lab.textContent || '')) return lab.textContent;
+      }
+    }
+    return '';
+  }
+
+  // Native value setters that bypass React's synthetic re-render guard.
+  const inputSetter  = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,    'value')?.set;
+  const taSetter     = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  const selectSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype,   'value')?.set;
+  function setReactValue(el, v) {
+    try {
+      const tag = (el.tagName || '').toUpperCase();
+      const setter = tag === 'TEXTAREA' ? taSetter : tag === 'SELECT' ? selectSetter : inputSetter;
+      if (setter) setter.call(el, v); else el.value = v;
+      el.dispatchEvent(new Event('input',  { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    } catch (_) {}
+  }
+
+  function answerRadioGroup(name, scope, wantYes) {
+    const radios = scope.querySelectorAll('input[type="radio"][name="' + CSS.escape(name) + '"]');
+    if (!radios.length) return false;
+    const want = wantYes ? /^(yes|y|true|1)$/i : /^(no|n|false|0)$/i;
+    let target = null;
+    for (const r of radios) {
+      const v = (r.value || '').trim();
+      if (want.test(v)) { target = r; break; }
+      // Match the label text near the radio
+      let lab = r.closest('label');
+      if (!lab && r.id) lab = document.querySelector('label[for="' + CSS.escape(r.id) + '"]');
+      const lt = (lab?.textContent || '').trim();
+      if (want.test(lt)) { target = r; break; }
+    }
+    if (!target) return false;
+    if (!target.checked) target.click();
+    return true;
+  }
+  function answerSelect(sel, wantYes) {
+    const want = wantYes ? /^(yes|y|true|1)$/i : /^(no|n|false|0)$/i;
+    for (const opt of sel.options) {
+      if (want.test((opt.value || '').trim()) || want.test((opt.textContent || '').trim())) {
+        setReactValue(sel, opt.value);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  const ANSWERED = new WeakSet();
+  function processForm(scope) {
+    if (!scope || !scope.querySelectorAll) return;
+    // Radios — group by name within this scope
+    const radios = scope.querySelectorAll('input[type="radio"]');
+    const seenNames = new Set();
+    for (const r of radios) {
+      if (ANSWERED.has(r)) continue;
+      const name = r.name; if (!name || seenNames.has(name)) continue; seenNames.add(name);
+      // Use any radio in the group as a probe to find the question wrapper
+      const qtxt = questionTextFor(r);
+      if (!qtxt) continue;
+      const country = extractCountryFromText(qtxt);
+      const sponsorship = SPONSORSHIP_RE.test(qtxt);
+      let wantYes;
+      if (sponsorship) {
+        // "Will you require sponsorship?" — answer No when authorized.
+        wantYes = country ? !isAuthorizedFor(country) : false;
+      } else {
+        wantYes = country ? !!isAuthorizedFor(country) : null;
+        if (wantYes === null) continue;
+      }
+      if (answerRadioGroup(name, scope, wantYes)) {
+        scope.querySelectorAll('input[type="radio"][name="' + CSS.escape(name) + '"]').forEach(x => ANSWERED.add(x));
+        log('radio', name, '→', wantYes ? 'Yes' : 'No', '(' + (country || '?') + ')');
+      }
+    }
+    // Selects
+    const selects = scope.querySelectorAll('select');
+    for (const s of selects) {
+      if (ANSWERED.has(s)) continue;
+      const qtxt = questionTextFor(s);
+      if (!qtxt) continue;
+      const country = extractCountryFromText(qtxt);
+      const sponsorship = SPONSORSHIP_RE.test(qtxt);
+      let wantYes;
+      if (sponsorship) wantYes = country ? !isAuthorizedFor(country) : false;
+      else { wantYes = country ? !!isAuthorizedFor(country) : null; if (wantYes === null) continue; }
+      if (answerSelect(s, wantYes)) { ANSWERED.add(s); log('select →', wantYes ? 'Yes' : 'No'); }
+    }
+  }
+  function processAll() {
+    if (SELECTED.size === 0) return;
+    try { processForm(document); } catch (_) {}
+    // Also try common iframe scopes
+    try {
+      for (const f of document.querySelectorAll('iframe')) {
+        try { processForm(f.contentDocument); } catch (_) {}
+      }
+    } catch (_) {}
+  }
+  loadSelected();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', processAll, { once: true });
+  } else {
+    processAll();
+  }
+  try {
+    const mo = new MutationObserver(() => { processAll(); });
+    mo.observe(document.documentElement, { childList: true, subtree: true });
+  } catch (_) {}
+  // Refresh resolved set whenever storage changes (cross-tab support)
+  try {
+    if (chrome.storage && chrome.storage.onChanged) {
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === 'local' && changes[STORAGE_KEY]) {
+          const v = changes[STORAGE_KEY].newValue;
+          SELECTED = new Set(Array.isArray(v) ? v : []);
+          refreshResolved();
+          processAll();
+        }
+      });
+    }
   } catch (_) {}
 })();
